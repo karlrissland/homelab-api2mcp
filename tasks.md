@@ -38,11 +38,11 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | `internal/pipeline`: ordered named-stage chain |
-| not started | Hardcoded `user`/`admin` keys for dev |
-| not started | Authn stage (key lookup) |
-| not started | Authz stage (tier check vs. tool tier) |
-| not started | Unit tests: accept/reject matrix |
+| done | `internal/pipeline`: ordered named-stage chain |
+| done | Hardcoded `user`/`admin` keys for dev |
+| done | Authn stage (key lookup) |
+| done | Authz stage (tier check vs. tool tier) |
+| done | Unit tests: accept/reject matrix |
 
 ## Phase 4 — ConfigMap-based manifest discovery
 
