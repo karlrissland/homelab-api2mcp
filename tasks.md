@@ -57,10 +57,10 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | `internal/keys`: mint/store/revoke |
-| not started | Secret naming: `<agent-instance>-mcp2rest-keys` |
+| done | `internal/keys`: mint/store/revoke |
+| done | Secret naming: `<agent-instance>-mcp2rest-keys` |
 | not started | RBAC: namespace-label-scoped ClusterRole for Secret write |
-| not started | Integration test: minted key's Secret lands correctly + authenticates |
+| done | Integration test: minted key's Secret lands correctly + authenticates |
 
 ## Phase 6 — Management tool set + human-admin bootstrap
 
