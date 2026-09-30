@@ -48,10 +48,10 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | `internal/discovery`: informer (list+watch by label) |
-| not started | Routing table build/update from informer events |
-| not started | RBAC: cluster-wide ConfigMap list/watch |
-| not started | envtest/kind integration test: add/remove ConfigMap reflected live |
+| done | `internal/discovery`: informer (list+watch by label) |
+| done | Routing table build/update from informer events |
+| done | RBAC: cluster-wide ConfigMap list/watch |
+| done | Fake-clientset integration tests: add/remove ConfigMap reflected live; unlabeled/invalid manifests ignored |
 
 ## Phase 5 — Key issuance + per-instance Secret delivery
 
