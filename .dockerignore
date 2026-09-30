@@ -1,0 +1,10 @@
+.git/
+.github/
+docs/
+skills/
+testdata/
+tasks.md
+README.md
+*.md
+bin/
+dist/

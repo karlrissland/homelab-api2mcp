@@ -1,0 +1,14 @@
+# Build artifacts
+/bin/
+/dist/
+*.exe
+*.test
+
+# Go tooling
+/vendor/
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
