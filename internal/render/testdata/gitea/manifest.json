@@ -1,0 +1,24 @@
+{
+  "name": "gitea",
+  "namespace": "test-gitea",
+  "upstreamBaseURL": "http://example.invalid",
+  "tools": [
+    {
+      "name": "list_my_repos",
+      "description": "List repositories visible to the current user.",
+      "tier": "user",
+      "type": "rendered",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  ]
+}

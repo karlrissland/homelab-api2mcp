@@ -1,0 +1,3 @@
+{% for repo in response.body -%}
+- {{ repo.full_name }}{% if repo.private %} (private){% endif %}
+{% endfor -%}
