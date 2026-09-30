@@ -31,7 +31,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 |---|---|
 | done | `internal/render`: Liquid render context + execute |
 | done | Fixture manifest + `request.liquid`/`response.liquid` (Gitea) |
-| done | Wire fixture into Phase 1's tool dispatch |
+| not started | Wire fixture into Phase 1's tool dispatch — `internal/render` built and tested standalone (httptest round trip); not yet called from `internal/mcpserver`'s live dispatch. Will be wired up once `internal/pipeline` (Phase 3) is integrated, since the real dispatch path is authn→authz→tool-resolve→render, not render called directly from Phase 1's echo-only handler. |
 | done | Integration test: full request→render→call→render→respond |
 
 ## Phase 3 — Two-tier (user/admin) authz
@@ -60,7 +60,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 | done | `internal/keys`: mint/store/revoke |
 | done | Secret naming: `<agent-instance>-mcp2rest-keys` |
 | not started | RBAC: namespace-label-scoped ClusterRole for Secret write |
-| done | Integration test: minted key's Secret lands correctly + authenticates |
+| not started | Integration test: minted key's Secret lands correctly + authenticates against Phase 3's authz stage — `internal/keys` has its own standalone tests (mint/store/revoke, Secret upsert via fake clientset); `internal/pipeline`'s authn stage still uses its own hardcoded dev-key map (built in parallel) and is not yet wired to `internal/keys` as the real key source. |
 
 ## Phase 6 — Management tool set + human-admin bootstrap
 
