@@ -130,7 +130,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | Author `SKILL.md` content (how to use mcp2rest) |
+| done | Author `SKILL.md` content (how to use mcp2rest) |
 | not started | Bundle into Phase 11's provisioning step |
 | not started | Test: `list_skills`/`get_skill` return it post-bootstrap, no extra step |
 
