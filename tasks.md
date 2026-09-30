@@ -29,10 +29,10 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | `internal/render`: Liquid render context + execute |
-| not started | Fixture manifest + `request.liquid`/`response.liquid` (Gitea) |
-| not started | Wire fixture into Phase 1's tool dispatch |
-| not started | Integration test: full request→render→call→render→respond |
+| done | `internal/render`: Liquid render context + execute |
+| done | Fixture manifest + `request.liquid`/`response.liquid` (Gitea) |
+| done | Wire fixture into Phase 1's tool dispatch |
+| done | Integration test: full request→render→call→render→respond |
 
 ## Phase 3 — Two-tier (user/admin) authz
 
