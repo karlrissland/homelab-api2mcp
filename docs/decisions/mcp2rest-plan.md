@@ -625,6 +625,9 @@ enough to track in `tasks.md`.
   - *Depends on*: Phase 6 (reuses the same auth/routing pipeline).
 
 - **Phase 10 — `hlctl` integration.**
+  - *Tracked upstream*: [homelab#215](https://github.com/karlrissland/homelab/issues/215)
+    — per cross-repo policy, this repo does not implement `homelab`-side
+    work directly; it was requested via a GitHub issue for that team.
   - *Goal*: `homelab`'s `hlctl` gains the `mcpTools:` app.yaml schema
     block, `internal/mcpproxy` (render/validate at `app validate` time),
     and the minimal MCP/JSON-RPC client that calls `register_app`/
@@ -638,6 +641,7 @@ enough to track in `tasks.md`.
   - *Depends on*: Phase 6.
 
 - **Phase 11 — mcp2rest platform-service provisioning in `hlctl`.**
+  - *Tracked upstream*: [homelab#216](https://github.com/karlrissland/homelab/issues/216).
   - *Goal*: `hlctl` provisions mcp2rest itself — pulling its public GHCR
     image and deploying it by default as part of the platform bootstrap
     (Open Decision 3), the same way it provisions Traefik/Prometheus.
@@ -650,6 +654,7 @@ enough to track in `tasks.md`.
   - *Depends on*: Phase 6 (needs a real image/binary to provision).
 
 - **Phase 12 — Catalog pilot: Gitea end-to-end.**
+  - *Tracked upstream*: [homelab-catalog#103](https://github.com/karlrissland/homelab-catalog/issues/103).
   - *Goal*: validate the whole pipeline on one real `homelab-catalog` app.
   - *Deliverables*: `mcpTools:` manifest + `maps/mcp/**` templates for
     Gitea, reusing the research already captured in its `gitea-api` Skill.

@@ -101,6 +101,11 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 ## Phase 10 — `hlctl` integration (homelab repo)
 
+> Tracked upstream: [homelab#215](https://github.com/karlrissland/homelab/issues/215).
+> This repo does not implement `homelab`-side work directly — per
+> cross-repo policy, changes needed in another repo are requested via a
+> GitHub issue for that team, not made here.
+
 | Status | Task |
 |---|---|
 | not started | `mcpTools:` app.yaml schema block |
@@ -112,6 +117,8 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 ## Phase 11 — mcp2rest platform-service provisioning (homelab repo)
 
+> Tracked upstream: [homelab#216](https://github.com/karlrissland/homelab/issues/216).
+
 | Status | Task |
 |---|---|
 | not started | Provisioning package (Deployment/Service/Ingress/RBAC), mirrors `EnsureMCPServer` |
@@ -119,6 +126,8 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 | not started | Test: fresh cluster bootstrap → mcp2rest reachable at `mcp2rest.<dns.zone>` |
 
 ## Phase 12 — Catalog pilot: Gitea (homelab-catalog repo)
+
+> Tracked upstream: [homelab-catalog#103](https://github.com/karlrissland/homelab-catalog/issues/103).
 
 | Status | Task |
 |---|---|
