@@ -1,0 +1,84 @@
+# =============================================================================
+# Release — build and publish the mcp2rest container image
+# =============================================================================
+# Registry is configurable via GitHub repository variables — defaults to GHCR,
+# the same convention homelab-hub (ci-hub.yml) already uses:
+#   vars.CONTAINER_REGISTRY     — registry host (default: ghcr.io)
+#   vars.CONTAINER_IMAGE_NAME   — image name (default: <owner>/<repo>)
+#   vars.REGISTRY_USERNAME      — registry username (default: github.actor)
+#   secrets.REGISTRY_PASSWORD   — registry password (default: GITHUB_TOKEN)
+#
+# For GHCR (default), no extra secrets or variables are needed — this
+# satisfies homelab#216's requirement that hlctl be able to pull
+# ghcr.io/karlrissland/homelab-api2mcp:latest to provision mcp2rest as a
+# default platform service.
+#
+# Triggers:
+#   - Push to main (build + push :latest / :main-<sha>)
+#   - Release publication (build + push semver tags)
+#   - Pull requests (build only — never push)
+#   - Manual dispatch
+# =============================================================================
+
+name: Release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}
+  IMAGE_NAME: ${{ vars.CONTAINER_IMAGE_NAME || github.repository }}
+
+jobs:
+  build-and-push:
+    name: Build and push container image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ vars.REGISTRY_USERNAME || github.actor }}
+          password: ${{ secrets.REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
