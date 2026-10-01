@@ -5,11 +5,19 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	"github.com/karlrissland/homelab-api2mcp/internal/adminapi"
+	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
+	"github.com/karlrissland/homelab-api2mcp/internal/keys"
 	"github.com/karlrissland/homelab-api2mcp/internal/mcpserver"
+	"github.com/karlrissland/homelab-api2mcp/internal/render"
 )
 
 // version is set at release time via -ldflags; "dev" is the default for
@@ -24,10 +32,49 @@ func main() {
 
 	log.Printf("mcp2rest %s starting on %s", version, addr)
 
-	server := mcpserver.New()
-	handler := mcpserver.NewHandler(server)
+	client, err := kubernetes.NewForConfig(mustClusterConfig())
+	if err != nil {
+		log.Fatalf("mcp2rest: create kubernetes client: %v", err)
+	}
+
+	table, err := discovery.New(client)
+	if err != nil {
+		log.Fatalf("mcp2rest: create discovery table: %v", err)
+	}
+	ctx := context.Background()
+	go func() {
+		if err := table.Run(ctx); err != nil {
+			log.Fatalf("mcp2rest: discovery table stopped: %v", err)
+		}
+	}()
+
+	store := keys.NewStore()
+	writer, err := keys.NewSecretWriter(client)
+	if err != nil {
+		log.Fatalf("mcp2rest: create secret writer: %v", err)
+	}
+	admin, err := adminapi.New(client, table, store, writer)
+	if err != nil {
+		log.Fatalf("mcp2rest: create admin api: %v", err)
+	}
+	if _, _, err := admin.EnsureBootstrapAdminKey(os.Stderr); err != nil {
+		log.Fatalf("mcp2rest: bootstrap admin key: %v", err)
+	}
+
+	handler, err := mcpserver.NewRuntimeHandler(table, store, render.New(http.DefaultClient), admin)
+	if err != nil {
+		log.Fatalf("mcp2rest: create runtime handler: %v", err)
+	}
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		log.Fatalf("mcp2rest: server failed: %v", err)
 	}
+}
+
+func mustClusterConfig() *rest.Config {
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		log.Fatalf("mcp2rest: load in-cluster kubernetes config: %v", err)
+	}
+	return cfg
 }
