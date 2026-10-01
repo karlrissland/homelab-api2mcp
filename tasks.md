@@ -87,9 +87,9 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | Extend Liquid render context with `caller` object |
-| not started | Pilot manifest exercising `caller.username` impersonation |
-| not started | Integration test: two callers → two distinct rendered upstream requests |
+| done | Complete Liquid render context `caller` wiring — Phase 6 already populated `agentInstance`/`tier`/`appInstance`; Phase 8 now threads per-call `username` via reserved `__mcp2rest_caller_username` and strips it from `args` before Liquid sees the tool parameters |
+| done | Pilot manifest exercising `caller.username` impersonation |
+| done | Integration test: two callers → two distinct rendered upstream requests |
 
 ## Phase 9 — Passthrough mode
 
