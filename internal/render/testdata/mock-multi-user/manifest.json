@@ -1,0 +1,21 @@
+{
+  "name": "mock-multi-user",
+  "namespace": "test-mock-multi-user",
+  "upstreamBaseURL": "http://example.invalid",
+  "tools": [
+    {
+      "name": "list_projects",
+      "description": "Illustrative mock multi-user tool exercising caller.username impersonation.",
+      "tier": "user",
+      "type": "rendered",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "page": {
+            "type": "integer"
+          }
+        }
+      }
+    }
+  ]
+}
