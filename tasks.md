@@ -149,10 +149,10 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | Metrics middleware stage (`/metrics`, Prometheus) |
-| not started | Structured stdout logging |
-| not started | Grafana dashboard JSON + alert rules |
-| not started | Test: Prometheus scrape succeeds; dashboard shows pilot traffic |
+| done | Metrics middleware stage (`/metrics`, Prometheus) |
+| done | Structured stdout logging |
+| done | Grafana dashboard JSON + alert rules |
+| not started | Test: Prometheus scrape succeeds; dashboard shows pilot traffic — local tests now cover `/metrics` exposition and metrics recording, but live-cluster scrape validation + pilot-traffic dashboard verification still depend on Phase 11 provisioning and Phase 12 traffic |
 
 ## Phase 15 — Deferred (explicitly out of scope for v1)
 
