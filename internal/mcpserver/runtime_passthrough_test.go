@@ -97,7 +97,8 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
-	admin, err := adminapi.New(client, table, store, writer)
+	creds := mustCreds(t, client)
+	admin, err := adminapi.New(client, table, store, writer, creds)
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
@@ -137,6 +138,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 		store,
 		render.New(http.DefaultClient),
 		passthrough.New(upstream.Client()),
+		creds,
 		admin,
 		skillClient,
 		metrics,

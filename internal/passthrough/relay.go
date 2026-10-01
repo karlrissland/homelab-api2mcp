@@ -31,14 +31,51 @@ func New(httpClient *http.Client) *Relay {
 	return &Relay{httpClient: httpClient}
 }
 
-// Call relays tool to app.UpstreamMCPURL and flattens the upstream result into
-// the text content contract used by the rest of the mcp2rest pipeline.
-func (r *Relay) Call(ctx context.Context, app manifest.App, tool manifest.Tool, args map[string]any) (content string, err error) {
+// httpClientFor returns r.httpClient unchanged when credential is empty,
+// or a shallow clone whose Transport injects a fixed
+// `Authorization: Bearer <credential>` header on every outbound request —
+// the v1 passthrough auth convention (no per-app configurable scheme yet).
+func (r *Relay) httpClientFor(credential string) *http.Client {
+	if credential == "" {
+		return r.httpClient
+	}
+	cloned := *r.httpClient
+	cloned.Transport = &bearerRoundTripper{
+		credential: credential,
+		base:       r.httpClient.Transport,
+	}
+	return &cloned
+}
+
+// bearerRoundTripper injects a fixed Authorization: Bearer header into
+// every request before delegating to the wrapped (or default) transport.
+type bearerRoundTripper struct {
+	credential string
+	base       http.RoundTripper
+}
+
+func (t *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	cloned := req.Clone(req.Context())
+	cloned.Header.Set("Authorization", "Bearer "+t.credential)
+	return base.RoundTrip(cloned)
+}
+
+// Call relays tool to app/tool's effective upstream MCP URL and flattens
+// the upstream result into the text content contract used by the rest of
+// the mcp2rest pipeline. When credential is non-empty, it is sent as a
+// fixed `Authorization: Bearer <credential>` header on every request made
+// over the upstream connection (the v1 passthrough auth convention).
+func (r *Relay) Call(ctx context.Context, app manifest.App, tool manifest.Tool, args map[string]any, credential string) (content string, err error) {
 	if r == nil {
 		return "", fmt.Errorf("passthrough relay: relay is required")
 	}
-	if app.UpstreamMCPURL == "" {
-		return "", fmt.Errorf("passthrough relay: app %q has no upstreamMCPURL", app.Name)
+	upstreamURL := tool.EffectiveUpstreamMCPURL(app)
+	if upstreamURL == "" {
+		return "", fmt.Errorf("passthrough relay: app %q tool %q has no upstreamMCPURL", app.Name, tool.Name)
 	}
 	if tool.Type != manifest.ToolTypePassthrough {
 		return "", fmt.Errorf("passthrough relay: tool %q has unsupported type %q", tool.Name, tool.Type)
@@ -49,12 +86,12 @@ func (r *Relay) Call(ctx context.Context, app manifest.App, tool manifest.Tool, 
 
 	client := mcp.NewClient(relayImplementation, nil)
 	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-		Endpoint:             app.UpstreamMCPURL,
-		HTTPClient:           r.httpClient,
+		Endpoint:             upstreamURL,
+		HTTPClient:           r.httpClientFor(credential),
 		DisableStandaloneSSE: true,
 	}, nil)
 	if err != nil {
-		return "", fmt.Errorf("passthrough relay: connect to upstream MCP server %q for app %q: %w", app.UpstreamMCPURL, app.Name, err)
+		return "", fmt.Errorf("passthrough relay: connect to upstream MCP server %q for app %q: %w", upstreamURL, app.Name, err)
 	}
 
 	defer func() {

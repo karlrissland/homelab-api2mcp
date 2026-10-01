@@ -77,6 +77,36 @@ type Tool struct {
 	// UpstreamToolName is the tool name on the upstream MCP server,
 	// required when Type == ToolTypePassthrough (may differ from Name).
 	UpstreamToolName string `json:"upstreamToolName,omitempty"`
+
+	// UpstreamCredentialEnv optionally overrides App.UpstreamCredentialEnv
+	// for this tool only (e.g. a narrower read-only credential for a
+	// "list" tool vs. an admin credential for a "delete" tool). Falls
+	// back to the app-level value when empty; see EffectiveCredentialEnv.
+	UpstreamCredentialEnv string `json:"upstreamCredentialEnv,omitempty"`
+	// UpstreamMCPURL optionally overrides App.UpstreamMCPURL for this
+	// tool only (an app proxying more than one native MCP server).
+	// Falls back to the app-level value when empty; see
+	// EffectiveUpstreamMCPURL.
+	UpstreamMCPURL string `json:"upstreamMCPURL,omitempty"`
+}
+
+// EffectiveCredentialEnv returns t.UpstreamCredentialEnv if set, otherwise
+// a.UpstreamCredentialEnv. An empty result means the tool requires no
+// upstream credential.
+func (t Tool) EffectiveCredentialEnv(a App) string {
+	if t.UpstreamCredentialEnv != "" {
+		return t.UpstreamCredentialEnv
+	}
+	return a.UpstreamCredentialEnv
+}
+
+// EffectiveUpstreamMCPURL returns t.UpstreamMCPURL if set, otherwise
+// a.UpstreamMCPURL.
+func (t Tool) EffectiveUpstreamMCPURL(a App) string {
+	if t.UpstreamMCPURL != "" {
+		return t.UpstreamMCPURL
+	}
+	return a.UpstreamMCPURL
 }
 
 // Validate reports a descriptive error if t is not well-formed.
@@ -141,8 +171,8 @@ func (a App) Validate() error {
 			return fmt.Errorf("app %q: duplicate tool name %q", a.Name, t.Name)
 		}
 		seen[t.Name] = struct{}{}
-		if t.Type == ToolTypePassthrough && a.UpstreamMCPURL == "" {
-			return fmt.Errorf("app %q: tool %q is passthrough but app has no upstreamMCPURL", a.Name, t.Name)
+		if t.Type == ToolTypePassthrough && t.EffectiveUpstreamMCPURL(a) == "" {
+			return fmt.Errorf("app %q: tool %q is passthrough but has no upstreamMCPURL (app- or tool-level)", a.Name, t.Name)
 		}
 	}
 	return nil

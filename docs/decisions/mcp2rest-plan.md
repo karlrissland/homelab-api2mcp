@@ -294,6 +294,67 @@ to the cluster like any other — discoverable via `list_skills`/
 dogfoods its own built-in skills tool for its own documentation; no
 separate mechanism required.
 
+### 3.8 Per-tool upstream credential injection (RESOLVED — homelab-api2mcp#1)
+
+`App.UpstreamCredentialEnv`/`UpstreamMCPURL` existed from the start but
+were never actually consumed anywhere — no credential storage or
+injection existed at any granularity, and real apps need per-tool
+granularity (e.g. a read-only token for a "list" tool vs. an admin token
+for a "delete" tool). This was raised as `homelab-api2mcp#1` and resolved
+through a dedicated design conversation. Final design:
+
+- **Per-tool override, app-level fallback.** `Tool` gains optional
+  `UpstreamCredentialEnv`/`UpstreamMCPURL` fields; `Tool.
+  EffectiveCredentialEnv(App)`/`EffectiveUpstreamMCPURL(App)` return the
+  tool-level value when set, else the app-level value. An empty result
+  means "no credential required" — no special-casing needed downstream.
+- **Secret shape**: one Secret per app instance, **native multi-key
+  `Secret.data`** (not a JSON blob) — two distinct Secrets per app
+  instance, differentiated by naming convention from the existing
+  `<agent-instance>-mcp2rest-keys` agent-key Secrets:
+  - `<app-instance>-api-keys` — credentials for rendered/REST tools.
+  - `<app-instance>-mcp-keys` — credentials for passthrough tools.
+  Both live in **mcp2rest's own namespace**, not the app's namespace.
+- **Who writes the Secret**: `hlctl`, directly into mcp2rest's namespace
+  (not passed through `register_app`). mcp2rest only ever *reads*
+  these Secrets — this is a `get`-only RBAC grant
+  (`manifests/rbac/upstream-creds-role.yaml`), smaller and namespace-
+  scoped, distinct from the existing cross-namespace
+  `mcp2rest-keys-secrets` ClusterRole used for agent key delivery.
+  Secret lifecycle on `deregister_app` is explicitly left to `hlctl` to
+  manage — mcp2rest does no deregister-time cleanup of its own.
+- **Full in-memory preload, manual reload only** (`internal/
+  upstreamcreds.Cache`) — chosen over live per-call Secret reads (avoids
+  per-call latency) and over a K8s watch/informer (unnecessary
+  complexity for how rarely credentials rotate). `Reload(ctx, apps)`
+  rebuilds the whole cache from the currently known app list every call,
+  so deregistered/renamed apps' stale entries are dropped automatically.
+  Exposed as one admin-tier MCP tool, **`reload_cache`** — no scoping
+  parameters in v1.
+- **Only `get` RBAC, never `list`/`watch`**, on Secrets — since app
+  instance names are already known from `discovery.Table.List()`, the
+  cache resolves exactly which two Secret names to fetch per app without
+  needing a label convention or broader read access.
+- **Credential binding is a single resolved string, not the full
+  credential map** — each tool's Liquid render context sees exactly the
+  one value for its own `EffectiveCredentialEnv` key, via a new
+  `{{ credential }}` Liquid binding (`internal/render.Context.Credential`),
+  mirroring exactly how `caller.*` was wired in Phase 8. Multi-value
+  upstream credentials (e.g. OAuth id+secret pairs) are an accepted v1
+  limitation — combine into one string and parse in the template if
+  needed.
+- **Fail-open on missing credentials**: an unprovisioned or missing
+  credential resolves to `""`, passed straight through to the backend
+  call. The backend's own auth rejection is the error signal, surfaced to
+  the caller as a normal tool-call error — no special "credential
+  missing" branch anywhere in mcp2rest.
+- **Passthrough auth convention (new gap, discovered during this design
+  pass)**: `internal/passthrough/relay.go` had *no* auth-injection
+  mechanism at all. Resolved: a fixed `Authorization: Bearer <credential>`
+  header, injected via a wrapping `http.RoundTripper` on the relay's
+  `http.Client` (the Go MCP SDK's `StreamableClientTransport` has no
+  native `Headers` field). No per-app configurable auth scheme in v1.
+
 ## 4. Open Decisions — confirm before/at implementation kickoff
 
 Flagging these explicitly rather than assuming, matching this org's own
@@ -388,6 +449,14 @@ Flagging these explicitly rather than assuming, matching this org's own
    needs). Recorded, not re-litigated — revisit only if real usage
    surfaces a problem, same "ship working, harden later" posture as
    item 6.
+9. ~~Per-tool upstream credential storage/injection (homelab-api2mcp#1).~~
+   — **RESOLVED, implemented**, see §3.8 for the full design: one Secret
+   per app instance (native multi-key `Secret.data`, two Secrets —
+   `<app-instance>-api-keys`/`<app-instance>-mcp-keys` — written directly
+   by `hlctl` into mcp2rest's namespace), `get`-only RBAC, full in-memory
+   preload with a manual `reload_cache` admin tool, a single resolved
+   `{{ credential }}` Liquid binding per tool call, and fail-open (empty
+   string) when a credential is missing.
 
 ## 5. Architecture
 

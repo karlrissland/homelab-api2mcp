@@ -186,15 +186,17 @@ func DefaultStages(keys map[string]KeyRecord) []Stage {
 }
 
 // RuntimeStages returns the real runtime execution chain backed by a
-// dynamic key lookup, internal/render, and optional passthrough relay.
-func RuntimeStages(lookup KeyLookup, renderer ToolRenderer, relay PassthroughRelay, metrics *Metrics, logger *slog.Logger) []Stage {
+// dynamic key lookup, internal/render, optional passthrough relay, and an
+// optional upstream credential resolver (internal/upstreamcreds). A nil
+// resolver is valid and simply resolves every credential to "".
+func RuntimeStages(lookup KeyLookup, renderer ToolRenderer, relay PassthroughRelay, resolver CredentialResolver, metrics *Metrics, logger *slog.Logger) []Stage {
 	return []Stage{
 		NewMetricsStage(metrics),
 		NewLoggingStage(logger),
 		NewAuthenticationStageFromLookup(lookup),
 		NewAuthorizationStage(),
 		NewToolResolveStage(),
-		NewRenderRequestStage(),
+		NewRenderRequestStage(resolver),
 		NewUpstreamCallStage(renderer, relay),
 		NewRenderResponseStage(),
 		NewRespondStage(),

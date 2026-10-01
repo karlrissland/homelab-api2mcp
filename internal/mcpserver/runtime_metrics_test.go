@@ -33,7 +33,8 @@ func TestRuntimeHandlerServesMetricsEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
-	admin, err := adminapi.New(client, table, store, writer)
+	creds := mustCreds(t, client)
+	admin, err := adminapi.New(client, table, store, writer, creds)
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
@@ -45,7 +46,7 @@ func TestRuntimeHandlerServesMetricsEndpoint(t *testing.T) {
 
 	metrics, logger, metricsHandler := testRuntimeObservability(t)
 	metrics.Observe("demo", "list_repos", "success", 50*time.Millisecond)
-	handler, err := NewRuntimeHandler(table, store, render.New(http.DefaultClient), nil, admin, skillClient, metrics, logger, metricsHandler)
+	handler, err := NewRuntimeHandler(table, store, render.New(http.DefaultClient), nil, creds, admin, skillClient, metrics, logger, metricsHandler)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}

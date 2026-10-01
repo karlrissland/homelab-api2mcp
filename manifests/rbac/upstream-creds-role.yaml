@@ -1,0 +1,28 @@
+# Grants mcp2rest's ServiceAccount read-only access to the upstream
+# credential Secrets (internal/upstreamcreds) living in mcp2rest's own
+# namespace: <app-instance>-api-keys and <app-instance>-mcp-keys.
+#
+# Per docs/decisions/mcp2rest-plan.md's "Per-tool upstream credential
+# injection" decision (homelab-api2mcp#1): mcp2rest already knows every
+# registered app instance's name from the discovery table, so it only
+# ever needs to `get` two well-known Secret names per app — it never
+# needs to `list`/`watch` Secrets, and it never needs cross-namespace
+# access (unlike mcp2rest-keys-secrets, which mints Secrets into each
+# *agent* instance's own namespace). This is therefore intentionally a
+# much smaller, namespace-scoped Role, not an extension of the existing
+# mcp2rest-keys-secrets ClusterRole.
+#
+# This Role is namespaced to mcp2rest's own deployment namespace
+# ("mcp2rest" by default, matching the MCP2REST_NAMESPACE default in
+# cmd/mcp2rest/main.go). hlctl is responsible for applying this Role (and
+# its RoleBinding to mcp2rest's ServiceAccount) into whatever namespace
+# mcp2rest is actually deployed into.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp2rest-upstream-creds
+  namespace: mcp2rest
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]

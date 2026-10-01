@@ -20,12 +20,21 @@ import (
 
 const bootstrapAdminAgent = "cluster-admin"
 
+// CredentialReloader rebuilds the upstream credential cache
+// (internal/upstreamcreds) from the currently known app list. It is a
+// narrow interface so adminapi does not need to import upstreamcreds
+// directly, matching this package's existing dependency-inversion style.
+type CredentialReloader interface {
+	Reload(ctx context.Context, apps []*manifest.App) error
+}
+
 // API serves the reserved management tool set.
 type API struct {
 	client kubernetes.Interface
 	table  *discovery.Table
 	store  *keys.Store
 	writer *keys.SecretWriter
+	creds  CredentialReloader
 }
 
 // AuthorizedAgent identifies one agent instance that should hold a key.
@@ -124,8 +133,13 @@ type RotateKeyResult struct {
 	Revoked       int           `json:"revoked"`
 }
 
+// ReloadCacheResult reports how many apps' credentials were reloaded.
+type ReloadCacheResult struct {
+	Apps int `json:"apps"`
+}
+
 // New constructs the management API.
-func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store, writer *keys.SecretWriter) (*API, error) {
+func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store, writer *keys.SecretWriter, creds CredentialReloader) (*API, error) {
 	switch {
 	case client == nil:
 		return nil, fmt.Errorf("new admin api: kubernetes client is required")
@@ -135,8 +149,10 @@ func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store,
 		return nil, fmt.Errorf("new admin api: key store is required")
 	case writer == nil:
 		return nil, fmt.Errorf("new admin api: secret writer is required")
+	case creds == nil:
+		return nil, fmt.Errorf("new admin api: credential reloader is required")
 	default:
-		return &API{client: client, table: table, store: store, writer: writer}, nil
+		return &API{client: client, table: table, store: store, writer: writer, creds: creds}, nil
 	}
 }
 
@@ -274,6 +290,17 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 		result, err := a.RotateKey(ctx, params)
 		return nil, result, err
 	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "reload_cache",
+		Description: "Reload the in-memory upstream credential cache from the current discovery table. Call after provisioning or rotating an app's api-keys/mcp-keys Secret.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ReloadCacheResult, error) {
+		if err := a.requireAdmin(apiKey); err != nil {
+			return nil, ReloadCacheResult{}, err
+		}
+		result, err := a.ReloadCache(ctx)
+		return nil, result, err
+	})
 }
 
 // RegisterApp validates and persists one manifest and ensures each authorized
@@ -362,6 +389,16 @@ func (a *API) GetManifest(_ context.Context, params GetManifestParams) (manifest
 		return manifest.App{}, fmt.Errorf("get manifest: app %q not found", params.AppName)
 	}
 	return *app, nil
+}
+
+// ReloadCache rebuilds the in-memory upstream credential cache from the
+// apps currently visible in the live discovery table.
+func (a *API) ReloadCache(ctx context.Context) (ReloadCacheResult, error) {
+	apps := a.table.List()
+	if err := a.creds.Reload(ctx, apps); err != nil {
+		return ReloadCacheResult{}, fmt.Errorf("reload cache: %w", err)
+	}
+	return ReloadCacheResult{Apps: len(apps)}, nil
 }
 
 // CreateKey mints and persists a new key for one agent instance.

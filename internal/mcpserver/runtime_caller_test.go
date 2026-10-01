@@ -86,7 +86,8 @@ func TestRuntimeHandlerCallerUsernameImpersonationRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
-	admin, err := adminapi.New(client, table, store, writer)
+	creds := mustCreds(t, client)
+	admin, err := adminapi.New(client, table, store, writer, creds)
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
@@ -121,7 +122,7 @@ func TestRuntimeHandlerCallerUsernameImpersonationRoundTrip(t *testing.T) {
 	}
 
 	metrics, logger, metricsHandler := testRuntimeObservability(t)
-	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), admin, skillClient, metrics, logger, metricsHandler)
+	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), creds, admin, skillClient, metrics, logger, metricsHandler)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}

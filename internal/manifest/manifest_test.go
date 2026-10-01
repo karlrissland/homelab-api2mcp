@@ -92,6 +92,58 @@ func TestAppValidate(t *testing.T) {
 			t.Error("expected error for passthrough tool missing app-level upstreamMCPURL, got nil")
 		}
 	})
+
+	t.Run("passthrough tool with only tool-level upstream URL", func(t *testing.T) {
+		app := App{Name: "gitea", Tools: []Tool{
+			{Name: "t1", Tier: TierUser, Type: ToolTypePassthrough, UpstreamToolName: "x", UpstreamMCPURL: "https://upstream.example.invalid/mcp"},
+		}}
+		if err := app.Validate(); err != nil {
+			t.Errorf("expected tool-level upstreamMCPURL to satisfy validation, got error: %v", err)
+		}
+	})
+}
+
+func TestToolEffectiveCredentialEnv(t *testing.T) {
+	app := App{Name: "gitea", UpstreamCredentialEnv: "app-token"}
+
+	t.Run("falls back to app-level value", func(t *testing.T) {
+		tool := Tool{Name: "t1"}
+		if got := tool.EffectiveCredentialEnv(app); got != "app-token" {
+			t.Errorf("EffectiveCredentialEnv() = %q, want %q", got, "app-token")
+		}
+	})
+
+	t.Run("tool-level override wins", func(t *testing.T) {
+		tool := Tool{Name: "t1", UpstreamCredentialEnv: "tool-token"}
+		if got := tool.EffectiveCredentialEnv(app); got != "tool-token" {
+			t.Errorf("EffectiveCredentialEnv() = %q, want %q", got, "tool-token")
+		}
+	})
+
+	t.Run("empty when neither set", func(t *testing.T) {
+		tool := Tool{Name: "t1"}
+		if got := tool.EffectiveCredentialEnv(App{Name: "metube"}); got != "" {
+			t.Errorf("EffectiveCredentialEnv() = %q, want empty", got)
+		}
+	})
+}
+
+func TestToolEffectiveUpstreamMCPURL(t *testing.T) {
+	app := App{Name: "gitea", UpstreamMCPURL: "https://app-level.example.invalid/mcp"}
+
+	t.Run("falls back to app-level value", func(t *testing.T) {
+		tool := Tool{Name: "t1"}
+		if got := tool.EffectiveUpstreamMCPURL(app); got != "https://app-level.example.invalid/mcp" {
+			t.Errorf("EffectiveUpstreamMCPURL() = %q, want app-level URL", got)
+		}
+	})
+
+	t.Run("tool-level override wins", func(t *testing.T) {
+		tool := Tool{Name: "t1", UpstreamMCPURL: "https://tool-level.example.invalid/mcp"}
+		if got := tool.EffectiveUpstreamMCPURL(app); got != "https://tool-level.example.invalid/mcp" {
+			t.Errorf("EffectiveUpstreamMCPURL() = %q, want tool-level URL", got)
+		}
+	})
 }
 
 func TestAppFindTool(t *testing.T) {

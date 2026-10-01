@@ -94,6 +94,36 @@ func TestRegisterAppCreatesSecretAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestReloadCacheCallsCredentialReloader(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDiscovery(t, api.table, ctx)
+
+	if _, err := api.RegisterApp(ctx, RegisterAppParams{Namespace: "apps", Manifest: testManifest("demo")}); err != nil {
+		t.Fatalf("RegisterApp() error = %v", err)
+	}
+	waitForApp(t, api.table, "demo")
+
+	stub, ok := api.creds.(*stubCredentialReloader)
+	if !ok {
+		t.Fatalf("api.creds = %T, want *stubCredentialReloader", api.creds)
+	}
+
+	result, err := api.ReloadCache(ctx)
+	if err != nil {
+		t.Fatalf("ReloadCache() error = %v", err)
+	}
+	if result.Apps != 1 {
+		t.Fatalf("ReloadCache() Apps = %d, want 1", result.Apps)
+	}
+	if stub.called != 1 {
+		t.Fatalf("CredentialReloader.Reload called %d times, want 1", stub.called)
+	}
+}
+
 func TestListAppsAndGetManifestReflectDiscovery(t *testing.T) {
 	t.Parallel()
 
@@ -248,11 +278,21 @@ func newTestAPI(t *testing.T) *API {
 	if err != nil {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
-	api, err := New(client, table, store, writer)
+	api, err := New(client, table, store, writer, &stubCredentialReloader{})
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
 	return api
+}
+
+type stubCredentialReloader struct {
+	called int
+	err    error
+}
+
+func (s *stubCredentialReloader) Reload(context.Context, []*manifest.App) error {
+	s.called++
+	return s.err
 }
 
 func runDiscovery(t *testing.T, table *discovery.Table, ctx context.Context) {

@@ -21,11 +21,12 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 			Name: "demo",
 			Tools: []manifest.Tool{
 				{
-					Name:             "list_repos",
-					Tier:             manifest.TierUser,
-					Type:             manifest.ToolTypeRendered,
-					RequestTemplate:  "{}",
-					ResponseTemplate: "{}",
+					Name:                  "list_repos",
+					Tier:                  manifest.TierUser,
+					Type:                  manifest.ToolTypeRendered,
+					RequestTemplate:       "{}",
+					ResponseTemplate:      "{}",
+					UpstreamCredentialEnv: "token",
 				},
 			},
 		},
@@ -39,7 +40,7 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 			return KeyRecord{}, false
 		}
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, renderer, nil, nil, nil)...).Run(context.Background(), call)
+	}, renderer, nil, &stubCredentialResolver{value: "token-123"}, nil, nil)...).Run(context.Background(), call)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -54,6 +55,9 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 	}
 	if call.RenderContext.Caller.Username != "alice" {
 		t.Fatalf("CallContext.RenderContext.Caller.Username = %q, want %q", call.RenderContext.Caller.Username, "alice")
+	}
+	if call.RenderContext.Credential != "token-123" {
+		t.Fatalf("CallContext.RenderContext.Credential = %q, want %q", call.RenderContext.Credential, "token-123")
 	}
 }
 
@@ -81,7 +85,7 @@ func TestRuntimeStagesPassthroughTool(t *testing.T) {
 
 	err := NewExecutor(RuntimeStages(func(string) (KeyRecord, bool) {
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, &stubRenderer{}, relay, nil, nil)...).Run(context.Background(), call)
+	}, &stubRenderer{}, relay, nil, nil, nil)...).Run(context.Background(), call)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -115,7 +119,7 @@ func TestRuntimeStagesPassthroughRejectedWithoutRelay(t *testing.T) {
 
 	err := NewExecutor(RuntimeStages(func(key string) (KeyRecord, bool) {
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, &stubRenderer{}, nil, nil, nil)...).Run(context.Background(), call)
+	}, &stubRenderer{}, nil, nil, nil, nil)...).Run(context.Background(), call)
 	if !errors.Is(err, ErrPassthroughNotSupported) {
 		t.Fatalf("Run() error = %v, want ErrPassthroughNotSupported", err)
 	}
@@ -138,7 +142,15 @@ type stubPassthroughRelay struct {
 	called  int
 }
 
-func (s *stubPassthroughRelay) Call(_ context.Context, _ manifest.App, _ manifest.Tool, _ map[string]any) (string, error) {
+func (s *stubPassthroughRelay) Call(_ context.Context, _ manifest.App, _ manifest.Tool, _ map[string]any, _ string) (string, error) {
 	s.called++
 	return s.content, s.err
+}
+
+type stubCredentialResolver struct {
+	value string
+}
+
+func (s *stubCredentialResolver) Credential(_ manifest.ToolType, _, _ string) string {
+	return s.value
 }

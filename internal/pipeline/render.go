@@ -15,17 +15,30 @@ type ToolRenderer interface {
 
 // PassthroughRelay calls a passthrough tool on an upstream MCP server.
 type PassthroughRelay interface {
-	Call(ctx context.Context, app manifest.App, tool manifest.Tool, args map[string]any) (string, error)
+	Call(ctx context.Context, app manifest.App, tool manifest.Tool, args map[string]any, credential string) (string, error)
+}
+
+// CredentialResolver resolves the upstream credential value for one tool
+// call from the in-memory upstream-credential cache (internal/upstreamcreds).
+// A nil resolver, or a tool with no EffectiveCredentialEnv, yields "".
+type CredentialResolver interface {
+	Credential(toolType manifest.ToolType, appInstance, key string) string
 }
 
 // NewRenderRequestStage builds the render-request stage.
-func NewRenderRequestStage() Stage {
+func NewRenderRequestStage(resolver CredentialResolver) Stage {
 	return NewStage(renderRequestStageName, func(_ context.Context, call *CallContext) error {
 		if !call.Caller.Tier.Valid() {
 			return ErrUnauthenticated
 		}
 		if call.Tool.Name == "" {
 			return ErrToolNotFound
+		}
+		var credential string
+		if resolver != nil {
+			if key := call.Tool.EffectiveCredentialEnv(call.App); key != "" {
+				credential = resolver.Credential(call.Tool.Type, call.App.Name, key)
+			}
 		}
 		call.RenderContext = render.Context{
 			Args: call.Args,
@@ -35,6 +48,7 @@ func NewRenderRequestStage() Stage {
 				Tier:          call.Caller.Tier,
 				AppInstance:   call.App.Name,
 			},
+			Credential: credential,
 		}
 		return nil
 	})
@@ -58,7 +72,7 @@ func NewUpstreamCallStage(renderer ToolRenderer, relay PassthroughRelay) Stage {
 			if relay == nil {
 				return fmt.Errorf("%w: tool %q on app %q", ErrPassthroughNotSupported, call.Tool.Name, call.App.Name)
 			}
-			content, err := relay.Call(ctx, call.App, call.Tool, call.Args)
+			content, err := relay.Call(ctx, call.App, call.Tool, call.Args, call.RenderContext.Credential)
 			if err != nil {
 				return err
 			}

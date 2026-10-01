@@ -181,8 +181,9 @@ func (c Context) bindings() liquid.Bindings {
 	}
 
 	return liquid.Bindings{
-		"args":   args,
-		"caller": c.Caller.bindings(),
+		"args":       args,
+		"caller":     c.Caller.bindings(),
+		"credential": c.Credential,
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
 	"github.com/karlrissland/homelab-api2mcp/internal/pipeline"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
+	"github.com/karlrissland/homelab-api2mcp/internal/upstreamcreds"
 )
 
 // version is set at release time via -ldflags; "dev" is the default for
@@ -37,6 +38,10 @@ func main() {
 	addr := os.Getenv("MCP2REST_ADDR")
 	if addr == "" {
 		addr = ":8080"
+	}
+	namespace := os.Getenv("MCP2REST_NAMESPACE")
+	if namespace == "" {
+		namespace = "mcp2rest"
 	}
 
 	logger.Info("mcp2rest starting", "version", version, "addr", addr)
@@ -67,7 +72,14 @@ func main() {
 	if err != nil {
 		fatal("create secret writer", err)
 	}
-	admin, err := adminapi.New(client, table, store, writer)
+	creds, err := upstreamcreds.New(client, namespace)
+	if err != nil {
+		fatal("create upstream credential cache", err)
+	}
+	if err := creds.Reload(ctx, table.List()); err != nil {
+		fatal("initial upstream credential reload", err)
+	}
+	admin, err := adminapi.New(client, table, store, writer, creds)
 	if err != nil {
 		fatal("create admin api", err)
 	}
@@ -93,6 +105,7 @@ func main() {
 		store,
 		render.New(http.DefaultClient),
 		passthrough.New(http.DefaultClient),
+		creds,
 		admin,
 		skillClient,
 		metrics,

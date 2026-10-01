@@ -36,6 +36,7 @@ type runtimeHandler struct {
 	store    *keys.Store
 	renderer *render.Renderer
 	relay    pipeline.PassthroughRelay
+	resolver pipeline.CredentialResolver
 	admin    *adminapi.API
 	skills   *skillstools.API
 	metrics  *pipeline.Metrics
@@ -58,6 +59,7 @@ func NewRuntimeHandler(
 	store *keys.Store,
 	renderer *render.Renderer,
 	relay pipeline.PassthroughRelay,
+	resolver pipeline.CredentialResolver,
 	admin *adminapi.API,
 	skillClient dynamic.Interface,
 	metrics *pipeline.Metrics,
@@ -85,6 +87,7 @@ func NewRuntimeHandler(
 		store:    store,
 		renderer: renderer,
 		relay:    relay,
+		resolver: resolver,
 		admin:    admin,
 		metrics:  metrics,
 		logger:   logger,
@@ -170,7 +173,7 @@ func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, 
 				Args:           toolArgs,
 				CallerUsername: callerUsername,
 			}
-			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer, h.relay, h.metrics, h.logger)
+			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer, h.relay, h.resolver, h.metrics, h.logger)
 			if err := pipeline.NewExecutor(stages...).Run(ctx, call); err != nil {
 				return nil, nil, err
 			}
