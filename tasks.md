@@ -15,6 +15,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 | done | Add Go best-practices + Docker best-practices skills under `.github/skills/` (or org's skill convention) |
 | done | Add `.github/workflows/ci.yml` (build + `go vet` + lint + `go test`) |
 | done | Skeleton `main.go` (prints version, exits 0) — CI green |
+| done | Publish repo to GitHub (`karlrissland/homelab-api2mcp`, public) + `.github/workflows/release.yml` publishing `ghcr.io/karlrissland/homelab-api2mcp:latest` on push to `main` — confirmed pullable with no credentials; resolves the "no image to pull yet" blocker flagged in homelab#216 |
 
 ## Phase 1 — MCP server skeleton
 
