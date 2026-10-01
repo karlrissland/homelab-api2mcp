@@ -1,0 +1,19 @@
+# Grants mcp2rest's ServiceAccount cluster-wide access to the shared Skill
+# CRD (`skills.skills.homelab.dev`) used by the built-in Phase 7 skills
+# tool namespace (internal/skillstools).
+#
+# Read access backs `list_skills`/`get_skill` for any authenticated key;
+# write access backs the admin-gated `create_skill`/`update_skill`/
+# `delete_skill` tools. Kubernetes RBAC applies to the pod, not the
+# individual MCP caller, so this v1 ClusterRole intentionally carries both
+# read and write verbs and relies on mcp2rest's own admin-tier checks to
+# gate write operations. Revisit toward split roles/bindings if real usage
+# justifies finer-grained deployment-time scoping.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp2rest-skills
+rules:
+  - apiGroups: ["skills.homelab.dev"]
+    resources: ["skills"]
+    verbs: ["get", "list", "watch", "create", "update", "delete"]

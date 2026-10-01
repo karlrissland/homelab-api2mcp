@@ -77,11 +77,11 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | RBAC: cluster-wide `Skill` CRD read; admin-gated write |
-| not started | `list_skills` / `get_skill` (any authenticated key) |
-| not started | `create_skill` / `update_skill` / `delete_skill` (admin only) |
-| not started | Integration test: CRD created out-of-band is visible via tools |
-| not started | Integration test: write path tier-gated correctly |
+| done | RBAC: cluster-wide `Skill` CRD read; admin-gated write — `manifests/rbac/skills-clusterrole.yaml` grants cluster-wide read and write access to `skills.skills.homelab.dev`; tool-level admin gating still controls `create_skill`/`update_skill`/`delete_skill` because Kubernetes RBAC applies to the pod, not the individual MCP caller. |
+| done | `list_skills` / `get_skill` (any authenticated key) |
+| done | `create_skill` / `update_skill` / `delete_skill` (admin only) |
+| done | Integration test: CRD created out-of-band is visible via tools |
+| done | Integration test: write path tier-gated correctly |
 
 ## Phase 8 — Multi-user impersonation (`caller` context)
 
