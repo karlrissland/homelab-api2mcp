@@ -20,6 +20,15 @@ import (
 
 const managementPath = "/mcp"
 
+// callerUsernameArgument is a reserved top-level tool argument used to
+// carry the end-user identity an agent is acting on behalf of for one
+// call. We intentionally use a namespaced argument instead of MCP
+// request `_meta`: `_meta` is protocol-level transport metadata, while
+// agents and generic MCP clients already know how to send tool
+// arguments. The runtime strips this key back out before exposing args.*
+// to Liquid so app manifests only see their declared tool parameters.
+const callerUsernameArgument = "__mcp2rest_caller_username"
+
 type runtimeHandler struct {
 	table    *discovery.Table
 	store    *keys.Store
@@ -116,11 +125,16 @@ func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, 
 			Description: tool.Description,
 			InputSchema: schemaOrEmptyObject(tool.InputSchema),
 		}, func(ctx context.Context, _ *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+			callerUsername, toolArgs, err := extractCallerUsername(args)
+			if err != nil {
+				return nil, nil, fmt.Errorf("tool %q: resolve caller username: %w", tool.Name, err)
+			}
 			call := &pipeline.CallContext{
-				APIKey:   apiKey,
-				App:      app,
-				ToolName: tool.Name,
-				Args:     args,
+				APIKey:         apiKey,
+				App:            app,
+				ToolName:       tool.Name,
+				Args:           toolArgs,
+				CallerUsername: callerUsername,
 			}
 			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer)
 			if err := pipeline.NewExecutor(stages...).Run(ctx, call); err != nil {
@@ -178,4 +192,35 @@ func schemaOrEmptyObject(schema map[string]any) map[string]any {
 		return schema
 	}
 	return map[string]any{"type": "object"}
+}
+
+func extractCallerUsername(args map[string]any) (string, map[string]any, error) {
+	if len(args) == 0 {
+		return "", nil, nil
+	}
+
+	cloned := make(map[string]any, len(args))
+	for name, value := range args {
+		cloned[name] = value
+	}
+
+	rawUsername, ok := cloned[callerUsernameArgument]
+	if !ok {
+		return "", cloned, nil
+	}
+	delete(cloned, callerUsernameArgument)
+
+	username, ok := rawUsername.(string)
+	if !ok {
+		return "", nil, fmt.Errorf("%s must be a string, got %T", callerUsernameArgument, rawUsername)
+	}
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return "", nil, fmt.Errorf("%s must not be empty", callerUsernameArgument)
+	}
+	if len(cloned) == 0 {
+		cloned = nil
+	}
+
+	return username, cloned, nil
 }

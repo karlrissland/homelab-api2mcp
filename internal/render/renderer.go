@@ -182,7 +182,20 @@ func (c Context) bindings() liquid.Bindings {
 
 	return liquid.Bindings{
 		"args":   args,
-		"caller": c.Caller,
+		"caller": c.Caller.bindings(),
+	}
+}
+
+func (c *Caller) bindings() liquid.Bindings {
+	if c == nil {
+		return nil
+	}
+
+	return liquid.Bindings{
+		"agentInstance": c.AgentInstance,
+		"username":      c.Username,
+		"tier":          c.Tier,
+		"appInstance":   c.AppInstance,
 	}
 }
 

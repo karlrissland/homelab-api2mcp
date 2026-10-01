@@ -118,6 +118,29 @@ func TestRendererRenderRequest(t *testing.T) {
 			wantBody:   `{"name":"demo","private":true}`,
 		},
 		{
+			name: "renders caller username from lower camel-case binding",
+			app: manifest.App{
+				UpstreamBaseURL: "https://gitea.example.test",
+			},
+			tool: manifest.Tool{
+				Name:             "impersonated_call",
+				Type:             manifest.ToolTypeRendered,
+				RequestTemplate:  `{"method":"GET","path":"/api/v1/user/repos?page={{ args.page }}","headers":{"X-Impersonate-User":"{{ caller.username }}","X-Agent-Instance":"{{ caller.agentInstance }}","X-App-Instance":"{{ caller.appInstance }}","X-Tier":"{{ caller.tier }}"}}`,
+				ResponseTemplate: `ok`,
+			},
+			data: Context{
+				Args: map[string]any{"page": 3},
+				Caller: &Caller{
+					AgentInstance: "hermes-alice",
+					Username:      "alice",
+					Tier:          manifest.TierUser,
+					AppInstance:   "demo",
+				},
+			},
+			wantMethod: http.MethodGet,
+			wantURL:    "https://gitea.example.test/api/v1/user/repos?page=3",
+		},
+		{
 			name: "rejects missing method",
 			app: manifest.App{
 				UpstreamBaseURL: "https://gitea.example.test",
@@ -156,6 +179,20 @@ func TestRendererRenderRequest(t *testing.T) {
 			}
 			if got := string(req.Body); got != tt.wantBody {
 				t.Fatalf("body = %q, want %q", got, tt.wantBody)
+			}
+			if tt.name == "renders caller username from lower camel-case binding" {
+				if got := req.Headers.Get("X-Impersonate-User"); got != "alice" {
+					t.Fatalf("X-Impersonate-User = %q, want %q", got, "alice")
+				}
+				if got := req.Headers.Get("X-Agent-Instance"); got != "hermes-alice" {
+					t.Fatalf("X-Agent-Instance = %q, want %q", got, "hermes-alice")
+				}
+				if got := req.Headers.Get("X-App-Instance"); got != "demo" {
+					t.Fatalf("X-App-Instance = %q, want %q", got, "demo")
+				}
+				if got := req.Headers.Get("X-Tier"); got != "user" {
+					t.Fatalf("X-Tier = %q, want %q", got, "user")
+				}
 			}
 		})
 	}

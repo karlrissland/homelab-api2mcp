@@ -29,8 +29,9 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 				},
 			},
 		},
-		ToolName: "list_repos",
-		Args:     map[string]any{"page": 2},
+		ToolName:       "list_repos",
+		Args:           map[string]any{"page": 2},
+		CallerUsername: "alice",
 	}
 
 	err := NewExecutor(RuntimeStages(func(key string) (KeyRecord, bool) {
@@ -50,6 +51,9 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 	}
 	if call.RenderContext.Caller == nil || call.RenderContext.Caller.AgentInstance != "agent-a" {
 		t.Fatalf("CallContext.RenderContext.Caller = %+v, want agent-a caller", call.RenderContext.Caller)
+	}
+	if call.RenderContext.Caller.Username != "alice" {
+		t.Fatalf("CallContext.RenderContext.Caller.Username = %q, want %q", call.RenderContext.Caller.Username, "alice")
 	}
 }
 

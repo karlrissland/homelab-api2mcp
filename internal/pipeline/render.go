@@ -26,6 +26,7 @@ func NewRenderRequestStage() Stage {
 			Args: call.Args,
 			Caller: &render.Caller{
 				AgentInstance: call.Caller.AgentInstance,
+				Username:      call.CallerUsername,
 				Tier:          call.Caller.Tier,
 				AppInstance:   call.App.Name,
 			},

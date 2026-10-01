@@ -56,6 +56,10 @@ type CallContext struct {
 	App      manifest.App
 	ToolName string
 	Args     map[string]any
+	// CallerUsername is the per-tool-call end-user identity supplied by
+	// the agent on whose behalf it is acting. It is independent of the
+	// authenticated API key, which is minted per agent instance.
+	CallerUsername string
 
 	Caller        Caller
 	Tool          manifest.Tool
