@@ -350,7 +350,7 @@ through a dedicated design conversation. Final design:
   missing" branch anywhere in mcp2rest.
 - **Passthrough auth convention (new gap, discovered during this design
   pass)**: `internal/passthrough/relay.go` had *no* auth-injection
-  mechanism at all. Resolved: a fixed `Authorization: Bearer <credential>`
+  mechanism at all. Resolved: a fixed bearer-scheme Authorization
   header, injected via a wrapping `http.RoundTripper` on the relay's
   `http.Client` (the Go MCP SDK's `StreamableClientTransport` has no
   native `Headers` field). No per-app configurable auth scheme in v1.

@@ -181,10 +181,10 @@ credentials).
 | done | New `internal/upstreamcreds` package: in-memory `Cache`, `Reload(ctx, apps)` full-preload, `Credential(toolType, appInstance, key)` lookup, `APIKeysSecretName`/`MCPKeysSecretName` helpers — fail-open (missing Secret/key → `""`, never an error) |
 | done | `internal/render.Context`: new `Credential` field + `credential` Liquid binding, mirroring the existing `caller` binding |
 | done | `internal/pipeline`: new `CredentialResolver` interface; `NewRenderRequestStage` resolves `tool.EffectiveCredentialEnv(app)` into `RenderContext.Credential` before every call (rendered and passthrough alike); `RuntimeStages` threads the resolver through |
-| done | `internal/passthrough/relay.go`: `Call` takes a `credential` parameter; non-empty values are injected as a fixed `Authorization: Bearer <credential>` header via a wrapping `http.RoundTripper` (v1 passthrough auth convention — no per-app configurable scheme yet) |
+| done | `internal/passthrough/relay.go`: `Call` takes a `credential` parameter; non-empty values are injected as a bearer-scheme Authorization header via a wrapping `http.RoundTripper` (v1 passthrough auth convention -- no per-app configurable scheme yet) |
 | done | `internal/adminapi`: new `reload_cache` admin-tier MCP tool, `CredentialReloader` interface, wired to `internal/upstreamcreds.Cache` |
 | done | `cmd/mcp2rest/main.go`: construct the credential cache (namespace from `MCP2REST_NAMESPACE`, default `mcp2rest`), initial `Reload()` at startup, wire into both the admin API and the runtime handler |
 | done | `manifests/rbac/upstream-creds-role.yaml`: new namespaced `Role` (not ClusterRole) granting `get`-only on Secrets in mcp2rest's own namespace |
 | done | Unit tests: manifest fallback methods, `upstreamcreds` cache (incl. fail-open + deregister-drop behavior), pipeline credential binding, passthrough header injection, adminapi `reload_cache` |
-| not started | File/update a `homelab` issue: hlctl must write `<app-instance>-api-keys`/`<app-instance>-mcp-keys` Secrets (converging/upsert semantics) into mcp2rest's namespace, and bind the new namespaced Role to mcp2rest's ServiceAccount |
-| not started | Reply to/close `homelab-api2mcp#1` summarizing the implemented design |
+| done | File/update a `homelab` issue: hlctl must write `<app-instance>-api-keys`/`<app-instance>-mcp-keys` Secrets (converging/upsert semantics) into mcp2rest's namespace, and bind the new namespaced Role to mcp2rest's ServiceAccount — filed `homelab#217` |
+| done | Reply to/close `homelab-api2mcp#1` summarizing the implemented design |
