@@ -125,15 +125,17 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 | not started | Wire into platform bootstrap (default-on, no opt-in) |
 | not started | Test: fresh cluster bootstrap → mcp2rest reachable at `mcp2rest.<dns.zone>` |
 
-## Phase 12 — Catalog pilot: Gitea (homelab-catalog repo)
+## Phase 12 — Catalog pilot: MeTube (homelab-catalog repo)
 
 > Tracked upstream: [homelab-catalog#103](https://github.com/karlrissland/homelab-catalog/issues/103).
+> Pilot app switched from Gitea to MeTube 2026-09-30 — lower resource
+> footprint to iterate against, and no API auth to wire up for the pilot.
 
 | Status | Task |
 |---|---|
-| not started | `mcpTools:` manifest + `maps/mcp/**` templates for Gitea |
-| not started | Reuse `gitea-api` Skill research for tool/operation selection |
-| not started | End-to-end test: real agent calls real Gitea-backed tool |
+| not started | `mcpTools:` manifest + `maps/mcp/**` templates for MeTube |
+| not started | Reuse `metube-api` Skill research for tool/operation selection |
+| not started | End-to-end test: real agent calls real MeTube-backed tool |
 
 ## Phase 13 — mcp2rest's own usage Skill
 

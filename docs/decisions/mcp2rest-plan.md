@@ -474,11 +474,17 @@ Flagging these explicitly rather than assuming, matching this org's own
 
 - Apps opt in with `mcpTools:` + `maps/mcp/**` in their own directory —
   same authoring shape as `providerMap`/`maps/*.liquid` today.
-- **Recommended pilot app: Gitea.** It already has a mature `gitea-api`
-  Skill enumerating exactly the endpoints worth exposing — that research is
-  directly reusable as the first real `mcpTools` manifest, and validates
-  the whole pipeline end-to-end on one real app before wider rollout
-  (mirrors this org's own "thin vertical slice first" phasing principle).
+- **Pilot app: MeTube** (revised 2026-09-30, was originally Gitea — switched
+  because MeTube needs far fewer cluster resources to stand up and iterate
+  against, which matters more than endpoint richness for a pilot whose goal
+  is proving the pipeline itself). It already has a mature `metube-api`
+  Skill enumerating exactly the endpoints worth exposing, and — unlike
+  Gitea — has no API-level auth at all, so the pilot can skip credential
+  wiring entirely and focus purely on the render/discovery/pipeline
+  mechanics. That research is directly reusable as the first real
+  `mcpTools` manifest, and validates the whole pipeline end-to-end on one
+  real app before wider rollout (mirrors this org's own "thin vertical
+  slice first" phasing principle).
 
 ## 6. Relationship to the existing "api" Skill / Cluster Agent credential flow
 
@@ -653,13 +659,15 @@ enough to track in `tasks.md`.
     per-app install step.
   - *Depends on*: Phase 6 (needs a real image/binary to provision).
 
-- **Phase 12 — Catalog pilot: Gitea end-to-end.**
+- **Phase 12 — Catalog pilot: MeTube end-to-end.**
   - *Tracked upstream*: [homelab-catalog#103](https://github.com/karlrissland/homelab-catalog/issues/103).
   - *Goal*: validate the whole pipeline on one real `homelab-catalog` app.
   - *Deliverables*: `mcpTools:` manifest + `maps/mcp/**` templates for
-    Gitea, reusing the research already captured in its `gitea-api` Skill.
+    MeTube (switched from Gitea 2026-09-30 — far lower resource footprint
+    to iterate against, and no API auth to wire up for the pilot),
+    reusing the research already captured in its `metube-api` Skill.
   - *Test/acceptance*: a real agent (Hermes or the Cluster Agent) calls a
-    real Gitea-backed MCP tool end-to-end through the deployed cluster.
+    real MeTube-backed MCP tool end-to-end through the deployed cluster.
   - *Depends on*: Phase 10, Phase 11.
 
 - **Phase 13 — mcp2rest's own usage Skill.**
