@@ -88,3 +88,64 @@ func (w *SecretWriter) UpsertSecret(ctx context.Context, agentInstance, namespac
 
 	return nil
 }
+
+// ReadSecretKeys returns the raw keys currently stored in the per-instance
+// Secret. A missing Secret is reported as an empty result.
+func (w *SecretWriter) ReadSecretKeys(ctx context.Context, agentInstance, namespace string) ([]string, error) {
+	if agentInstance == "" {
+		return nil, fmt.Errorf("read secret keys: agent instance is required")
+	}
+	if namespace == "" {
+		return nil, fmt.Errorf("read secret keys for agent instance %q: namespace is required", agentInstance)
+	}
+
+	secret, err := w.client.CoreV1().Secrets(namespace).Get(ctx, SecretName(agentInstance), metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf(
+			"read secret keys for agent instance %q in namespace %q: get secret: %w",
+			agentInstance,
+			namespace,
+			err,
+		)
+	}
+
+	raw, ok := secret.Data[secretDataKey]
+	if !ok || len(raw) == 0 {
+		return nil, nil
+	}
+
+	var decoded []string
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return nil, fmt.Errorf(
+			"read secret keys for agent instance %q in namespace %q: decode %q: %w",
+			agentInstance,
+			namespace,
+			secretDataKey,
+			err,
+		)
+	}
+
+	return decoded, nil
+}
+
+// DeleteSecret removes the per-instance Secret. A missing Secret is not an error.
+func (w *SecretWriter) DeleteSecret(ctx context.Context, agentInstance, namespace string) error {
+	if agentInstance == "" {
+		return fmt.Errorf("delete secret: agent instance is required")
+	}
+	if namespace == "" {
+		return fmt.Errorf("delete secret for agent instance %q: namespace is required", agentInstance)
+	}
+
+	if err := w.client.CoreV1().Secrets(namespace).Delete(ctx, SecretName(agentInstance), metav1.DeleteOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("delete secret %q in namespace %q: %w", SecretName(agentInstance), namespace, err)
+	}
+
+	return nil
+}

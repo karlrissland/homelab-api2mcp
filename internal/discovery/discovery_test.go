@@ -5,10 +5,43 @@ import (
 	"testing"
 	"time"
 
+	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestBuildConfigMapRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	app := manifest.App{
+		Name:            "demo",
+		UpstreamBaseURL: "https://demo.example.invalid",
+		Tools: []manifest.Tool{
+			{
+				Name:             "list_repos",
+				Description:      "List repos",
+				Tier:             manifest.TierUser,
+				Type:             manifest.ToolTypeRendered,
+				RequestTemplate:  `{"method":"GET","path":"/repos"}`,
+				ResponseTemplate: `{{ response.rawBody }}`,
+			},
+		},
+	}
+
+	cm, err := BuildConfigMap("apps", "demo-tools", app)
+	if err != nil {
+		t.Fatalf("BuildConfigMap() error = %v", err)
+	}
+
+	parsed, err := ParseConfigMap(cm)
+	if err != nil {
+		t.Fatalf("ParseConfigMap() error = %v", err)
+	}
+	if parsed.Name != app.Name || parsed.Namespace != "apps" || len(parsed.Tools) != 1 {
+		t.Fatalf("round-trip app = %+v, want name=%q namespace=%q and one tool", parsed, app.Name, "apps")
+	}
+}
 
 func TestTableReflectsConfigMapLifecycle(t *testing.T) {
 	client := fake.NewSimpleClientset()

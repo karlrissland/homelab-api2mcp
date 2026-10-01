@@ -169,6 +169,40 @@ func ParseConfigMap(cm *corev1.ConfigMap) (*manifest.App, error) {
 	return app, nil
 }
 
+// BuildConfigMap encodes app into a discovery-compatible ConfigMap.
+func BuildConfigMap(namespace, name string, app manifest.App) (*corev1.ConfigMap, error) {
+	if namespace == "" {
+		return nil, errors.New("build configmap: namespace is required")
+	}
+	if name == "" {
+		return nil, errors.New("build configmap: name is required")
+	}
+	if err := app.Validate(); err != nil {
+		return nil, fmt.Errorf("build configmap %s/%s: validate manifest: %w", namespace, name, err)
+	}
+
+	manifestApp := cloneApp(&app)
+	manifestApp.Namespace = ""
+
+	encoded, err := yaml.Marshal(manifestApp)
+	if err != nil {
+		return nil, fmt.Errorf("build configmap %s/%s: marshal manifest: %w", namespace, name, err)
+	}
+
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+			Labels: map[string]string{
+				AppLabelKey: app.Name,
+			},
+		},
+		Data: map[string]string{
+			manifestYAMLKey: string(encoded),
+		},
+	}, nil
+}
+
 func (t *Table) onAdd(obj any) {
 	cm, ok := obj.(*corev1.ConfigMap)
 	if !ok {

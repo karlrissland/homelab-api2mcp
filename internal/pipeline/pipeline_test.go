@@ -193,6 +193,25 @@ func TestExecutorRunPhase3Matrix(t *testing.T) {
 	}
 }
 
+func TestNewAuthenticationStageFromLookup(t *testing.T) {
+	t.Parallel()
+
+	stage := NewAuthenticationStageFromLookup(func(key string) (KeyRecord, bool) {
+		if key != "dynamic-key" {
+			return KeyRecord{}, false
+		}
+		return KeyRecord{AgentInstance: "dynamic-agent", Tier: manifest.TierAdmin}, true
+	})
+
+	call := &CallContext{APIKey: "dynamic-key"}
+	if err := stage.Handle(context.Background(), call); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	if call.Caller.AgentInstance != "dynamic-agent" || call.Caller.Tier != manifest.TierAdmin {
+		t.Fatalf("CallContext.Caller = %+v, want dynamic-agent/admin", call.Caller)
+	}
+}
+
 type countingStage struct {
 	Stage
 	count *int

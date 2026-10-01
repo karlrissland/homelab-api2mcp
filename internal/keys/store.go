@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -86,6 +87,37 @@ func (s *Store) Lookup(key string) (Record, bool) {
 	s.mu.RUnlock()
 
 	return record, ok
+}
+
+// List returns a snapshot of all known key records in creation order.
+func (s *Store) List() []Record {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	records := make([]Record, 0, len(s.records))
+	for _, record := range s.records {
+		records = append(records, record)
+	}
+	slices.SortFunc(records, func(a, b Record) int {
+		switch {
+		case a.CreatedAt.Before(b.CreatedAt):
+			return -1
+		case a.CreatedAt.After(b.CreatedAt):
+			return 1
+		case a.AgentInstance < b.AgentInstance:
+			return -1
+		case a.AgentInstance > b.AgentInstance:
+			return 1
+		case a.Tier < b.Tier:
+			return -1
+		case a.Tier > b.Tier:
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	return records
 }
 
 // Revoke removes a raw API key from the in-memory store.

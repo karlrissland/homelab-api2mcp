@@ -42,6 +42,39 @@ func TestStoreMintLookupRevoke(t *testing.T) {
 	}
 }
 
+func TestStoreList(t *testing.T) {
+	now := time.Date(2026, time.September, 30, 17, 30, 0, 0, time.UTC)
+	store := newStore(func() time.Time { return now })
+
+	first, err := store.Mint("hermes-alice", manifest.TierUser)
+	if err != nil {
+		t.Fatalf("Mint(first) error = %v", err)
+	}
+	if first == "" {
+		t.Fatal("Mint(first) returned empty key")
+	}
+
+	store.now = func() time.Time { return now.Add(time.Minute) }
+	second, err := store.Mint("hermes-bob", manifest.TierAdmin)
+	if err != nil {
+		t.Fatalf("Mint(second) error = %v", err)
+	}
+	if second == "" {
+		t.Fatal("Mint(second) returned empty key")
+	}
+
+	got := store.List()
+	if len(got) != 2 {
+		t.Fatalf("List() returned %d records, want 2", len(got))
+	}
+	if got[0].AgentInstance != "hermes-alice" || got[0].Tier != manifest.TierUser {
+		t.Fatalf("List()[0] = %+v, want hermes-alice user", got[0])
+	}
+	if got[1].AgentInstance != "hermes-bob" || got[1].Tier != manifest.TierAdmin {
+		t.Fatalf("List()[1] = %+v, want hermes-bob admin", got[1])
+	}
+}
+
 func TestStoreMintValidation(t *testing.T) {
 	t.Parallel()
 

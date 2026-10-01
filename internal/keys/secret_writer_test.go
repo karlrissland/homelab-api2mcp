@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
@@ -62,6 +63,14 @@ func TestSecretWriterUpsertSecret(t *testing.T) {
 	if got := string(updatedSecret.Data[secretDataKey]); got != `["key-3"]` {
 		t.Fatalf("updated secret.Data[%q] = %q, want %q", secretDataKey, got, `["key-3"]`)
 	}
+
+	keys, err := writer.ReadSecretKeys(ctx, agentInstance, namespace)
+	if err != nil {
+		t.Fatalf("ReadSecretKeys() error = %v", err)
+	}
+	if len(keys) != 1 || keys[0] != "key-3" {
+		t.Fatalf("ReadSecretKeys() = %#v, want []string{\"key-3\"}", keys)
+	}
 }
 
 func TestSecretWriterUpsertSecretValidation(t *testing.T) {
@@ -106,5 +115,57 @@ func TestNewSecretWriterRequiresClient(t *testing.T) {
 	}
 	if writer != nil {
 		t.Fatal("NewSecretWriter(nil) writer != nil")
+	}
+}
+
+func TestSecretWriterReadSecretKeysValidation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := fake.NewSimpleClientset()
+	writer, err := NewSecretWriter(client)
+	if err != nil {
+		t.Fatalf("NewSecretWriter() error = %v", err)
+	}
+
+	if _, err := writer.ReadSecretKeys(ctx, "", "agents"); err == nil {
+		t.Fatal("ReadSecretKeys() with empty agent instance error = nil, want error")
+	}
+	if _, err := writer.ReadSecretKeys(ctx, "hermes-alice", ""); err == nil {
+		t.Fatal("ReadSecretKeys() with empty namespace error = nil, want error")
+	}
+
+	keys, err := writer.ReadSecretKeys(ctx, "missing", "agents")
+	if err != nil {
+		t.Fatalf("ReadSecretKeys(missing) error = %v", err)
+	}
+	if keys != nil {
+		t.Fatalf("ReadSecretKeys(missing) = %#v, want nil", keys)
+	}
+}
+
+func TestSecretWriterDeleteSecret(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	client := fake.NewSimpleClientset()
+	writer, err := NewSecretWriter(client)
+	if err != nil {
+		t.Fatalf("NewSecretWriter() error = %v", err)
+	}
+
+	if err := writer.UpsertSecret(ctx, "hermes-alice", "agents", []string{"key-1"}); err != nil {
+		t.Fatalf("UpsertSecret() error = %v", err)
+	}
+	if err := writer.DeleteSecret(ctx, "hermes-alice", "agents"); err != nil {
+		t.Fatalf("DeleteSecret() error = %v", err)
+	}
+
+	_, err = client.CoreV1().Secrets("agents").Get(ctx, SecretName("hermes-alice"), metav1.GetOptions{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("Get() error = %v, want not found", err)
+	}
+	if err := writer.DeleteSecret(ctx, "hermes-alice", "agents"); err != nil {
+		t.Fatalf("DeleteSecret(missing) error = %v", err)
 	}
 }
