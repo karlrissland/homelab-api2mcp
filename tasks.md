@@ -95,9 +95,9 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| not started | `internal/passthrough`: JSON-RPC relay client |
-| not started | Upstream tool-name tier tagging / filtering |
-| not started | Integration test: tier filtering + relay correctness |
+| done | `internal/passthrough`: JSON-RPC relay client |
+| done | Upstream tool-name tier tagging / filtering |
+| done | Integration test: tier filtering + relay correctness |
 
 ## Phase 10 — `hlctl` integration (homelab repo)
 
