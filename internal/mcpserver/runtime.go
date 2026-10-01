@@ -33,6 +33,7 @@ type runtimeHandler struct {
 	table    *discovery.Table
 	store    *keys.Store
 	renderer *render.Renderer
+	relay    pipeline.PassthroughRelay
 	admin    *adminapi.API
 	skills   *skillstools.API
 	handler  *mcp.StreamableHTTPHandler
@@ -46,7 +47,7 @@ type route struct {
 // NewRuntimeHandler builds the runtime HTTP surface: management tools on
 // /mcp, per-app proxied tools on /{app}/mcp, and the built-in Phase 7
 // skills tools on both management and per-app routes.
-func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *render.Renderer, admin *adminapi.API, skillClient dynamic.Interface) (http.Handler, error) {
+func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *render.Renderer, relay pipeline.PassthroughRelay, admin *adminapi.API, skillClient dynamic.Interface) (http.Handler, error) {
 	switch {
 	case table == nil:
 		return nil, fmt.Errorf("new runtime handler: discovery table is required")
@@ -64,6 +65,7 @@ func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *rend
 		table:    table,
 		store:    store,
 		renderer: renderer,
+		relay:    relay,
 		admin:    admin,
 	}
 	skills, err := skillstools.New(skillClient, rh.lookupKey)
@@ -113,11 +115,16 @@ func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 		return server
 	}
 	h.skills.RegisterReadTools(server, apiKey)
+	server.AddReceivingMiddleware(appToolListFilter(*app, apiKey, h.lookupKey))
 	h.registerAppTools(server, *app, apiKey)
 	return server
 }
 
 func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, apiKey string) {
+	// We always register every discovered app tool, even ones the current caller
+	// is not allowed to use, so a direct tools/call by name still flows through
+	// the authz stage and is rejected there. tools/list is filtered separately by
+	// appToolListFilter to hide unauthorized app tools from lower-tier callers.
 	for _, tool := range app.Tools {
 		tool := tool
 		mcp.AddTool(server, &mcp.Tool{
@@ -136,7 +143,7 @@ func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, 
 				Args:           toolArgs,
 				CallerUsername: callerUsername,
 			}
-			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer)
+			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer, h.relay)
 			if err := pipeline.NewExecutor(stages...).Run(ctx, call); err != nil {
 				return nil, nil, err
 			}
@@ -146,6 +153,42 @@ func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, 
 				},
 			}, nil, nil
 		})
+	}
+}
+
+func appToolListFilter(app manifest.App, apiKey string, lookup pipeline.KeyLookup) mcp.Middleware {
+	requiredTiers := make(map[string]manifest.Tier, len(app.Tools))
+	for _, tool := range app.Tools {
+		requiredTiers[tool.Name] = tool.Tier
+	}
+
+	record, authenticated := lookup(apiKey)
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			result, err := next(ctx, method, req)
+			if err != nil || method != "tools/list" {
+				return result, err
+			}
+
+			listResult, ok := result.(*mcp.ListToolsResult)
+			if !ok {
+				return result, nil
+			}
+
+			filtered := listResult.Tools[:0]
+			for _, tool := range listResult.Tools {
+				requiredTier, appTool := requiredTiers[tool.Name]
+				if !appTool {
+					filtered = append(filtered, tool)
+					continue
+				}
+				if authenticated && record.Tier.Valid() && record.Tier.Satisfies(requiredTier) {
+					filtered = append(filtered, tool)
+				}
+			}
+			listResult.Tools = filtered
+			return listResult, nil
+		}
 	}
 }
 
@@ -188,10 +231,18 @@ func bearerToken(req *http.Request) string {
 }
 
 func schemaOrEmptyObject(schema map[string]any) map[string]any {
-	if schema != nil {
-		return schema
+	if len(schema) == 0 {
+		return map[string]any{"type": "object"}
 	}
-	return map[string]any{"type": "object"}
+
+	cloned := make(map[string]any, len(schema)+1)
+	for key, value := range schema {
+		cloned[key] = value
+	}
+	if _, ok := cloned["type"]; !ok {
+		cloned["type"] = "object"
+	}
+	return cloned
 }
 
 func extractCallerUsername(args map[string]any) (string, map[string]any, error) {

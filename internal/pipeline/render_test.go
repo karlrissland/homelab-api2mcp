@@ -39,7 +39,7 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 			return KeyRecord{}, false
 		}
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, renderer)...).Run(context.Background(), call)
+	}, renderer, nil)...).Run(context.Background(), call)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -57,7 +57,43 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 	}
 }
 
-func TestRuntimeStagesPassthroughRejected(t *testing.T) {
+func TestRuntimeStagesPassthroughTool(t *testing.T) {
+	t.Parallel()
+
+	relay := &stubPassthroughRelay{content: "relayed content"}
+	call := &CallContext{
+		APIKey: "dynamic-key",
+		App: manifest.App{
+			Name: "demo",
+			Tools: []manifest.Tool{
+				{
+					Name:             "relay",
+					Tier:             manifest.TierUser,
+					Type:             manifest.ToolTypePassthrough,
+					UpstreamToolName: "relay",
+				},
+			},
+			UpstreamMCPURL: "https://upstream.example.invalid/mcp",
+		},
+		ToolName: "relay",
+		Args:     map[string]any{"message": "hi"},
+	}
+
+	err := NewExecutor(RuntimeStages(func(string) (KeyRecord, bool) {
+		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
+	}, &stubRenderer{}, relay)...).Run(context.Background(), call)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if relay.called != 1 {
+		t.Fatalf("relay called %d times, want 1", relay.called)
+	}
+	if call.ResultContent != "relayed content" {
+		t.Fatalf("CallContext.ResultContent = %q, want %q", call.ResultContent, "relayed content")
+	}
+}
+
+func TestRuntimeStagesPassthroughRejectedWithoutRelay(t *testing.T) {
 	t.Parallel()
 
 	call := &CallContext{
@@ -79,7 +115,7 @@ func TestRuntimeStagesPassthroughRejected(t *testing.T) {
 
 	err := NewExecutor(RuntimeStages(func(key string) (KeyRecord, bool) {
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, &stubRenderer{})...).Run(context.Background(), call)
+	}, &stubRenderer{}, nil)...).Run(context.Background(), call)
 	if !errors.Is(err, ErrPassthroughNotSupported) {
 		t.Fatalf("Run() error = %v, want ErrPassthroughNotSupported", err)
 	}
@@ -94,4 +130,15 @@ type stubRenderer struct {
 func (s *stubRenderer) Execute(_ context.Context, _ manifest.App, _ manifest.Tool, _ render.Context) (render.Result, error) {
 	s.called++
 	return s.result, s.err
+}
+
+type stubPassthroughRelay struct {
+	content string
+	err     error
+	called  int
+}
+
+func (s *stubPassthroughRelay) Call(_ context.Context, _ manifest.App, _ manifest.Tool, _ map[string]any) (string, error) {
+	s.called++
+	return s.content, s.err
 }

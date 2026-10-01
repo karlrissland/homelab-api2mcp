@@ -18,6 +18,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
 	"github.com/karlrissland/homelab-api2mcp/internal/mcpserver"
+	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
 )
 
@@ -67,7 +68,14 @@ func main() {
 		log.Fatalf("mcp2rest: bootstrap admin key: %v", err)
 	}
 
-	handler, err := mcpserver.NewRuntimeHandler(table, store, render.New(http.DefaultClient), admin, skillClient)
+	handler, err := mcpserver.NewRuntimeHandler(
+		table,
+		store,
+		render.New(http.DefaultClient),
+		passthrough.New(http.DefaultClient),
+		admin,
+		skillClient,
+	)
 	if err != nil {
 		log.Fatalf("mcp2rest: create runtime handler: %v", err)
 	}

@@ -173,15 +173,15 @@ func DefaultStages(keys map[string]KeyRecord) []Stage {
 	}
 }
 
-// RuntimeStages returns the real Phase 6 execution chain backed by a
-// dynamic key lookup and internal/render.
-func RuntimeStages(lookup KeyLookup, renderer ToolRenderer) []Stage {
+// RuntimeStages returns the real runtime execution chain backed by a
+// dynamic key lookup, internal/render, and optional passthrough relay.
+func RuntimeStages(lookup KeyLookup, renderer ToolRenderer, relay PassthroughRelay) []Stage {
 	return []Stage{
 		NewAuthenticationStageFromLookup(lookup),
 		NewAuthorizationStage(),
 		NewToolResolveStage(),
 		NewRenderRequestStage(),
-		NewUpstreamCallStage(renderer),
+		NewUpstreamCallStage(renderer, relay),
 		NewRenderResponseStage(),
 		NewRespondStage(),
 	}

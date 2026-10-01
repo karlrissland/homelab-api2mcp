@@ -20,6 +20,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/adminapi"
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
+	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
 	"github.com/karlrissland/homelab-api2mcp/internal/skillstools"
 )
@@ -106,7 +107,7 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
 	}
 
-	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), admin, skillClient)
+	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), admin, skillClient)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}
