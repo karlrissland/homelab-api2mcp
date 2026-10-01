@@ -59,7 +59,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 |---|---|
 | done | `internal/keys`: mint/store/revoke |
 | done | Secret naming: `<agent-instance>-mcp2rest-keys` |
-| not started | RBAC: namespace-label-scoped ClusterRole for Secret write |
+| done | RBAC: namespace-label-scoped ClusterRole for Secret write — `manifests/rbac/keys-secrets-clusterrole.yaml` declares get/create/update on Secrets; actual namespace-label scoping is applied via the ClusterRoleBinding `hlctl` provisions (see homelab#216), since a ClusterRole itself cannot carry namespace scope. |
 | done | Integration test: minted key's Secret lands correctly + authenticates against Phase 3's authz stage — dynamic key lookup is now wired from `internal/keys.Store` into the runtime pipeline, with end-to-end tests covering Secret delivery plus authenticated rendered-tool execution. |
 
 ## Phase 6 — Management tool set + human-admin bootstrap
