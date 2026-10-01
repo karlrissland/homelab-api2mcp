@@ -1,5 +1,49 @@
 # mcp2rest — REST→MCP Proxy: Feasibility & Architecture Plan
 
+## Current status (2026-10-01)
+
+`homelab-api2mcp` itself (Phases 0–9, 13–14, 16) is implemented, unit
+tested, and shipping green CI/CD on `main` — the binary builds, boots a
+real MCP Streamable HTTP server, handles rendered + passthrough tools
+through the full pipeline (authn → authz → tool-resolve → render →
+upstream-call → render → respond), discovers apps via ConfigMaps,
+mints/delivers per-instance keys, exposes the management/skills tool
+sets, and now resolves per-tool upstream credentials (§3.8).
+
+**The `homelab` (hlctl) team is actively implementing the cross-repo
+remainder** (tracked on `homelab#215`/`#216`/`#217`), not merely
+planned:
+
+- `homelab#216` (Phase 11, platform provisioning): **substantially
+  done** — `internal/mcp2rest.Ensure` deploys mcp2rest's Namespace,
+  ServiceAccount, Deployment, Service, RBAC, and Ingress on every
+  cluster bootstrap, pulling the now-public `ghcr.io/karlrissland/
+  homelab-api2mcp` image. Two flagged findings worth tracking: (1) the
+  key store is single-replica/in-memory only — a restart loses all
+  minted keys including the bootstrap admin key; (2) the
+  `mcp2rest-keys-secrets` ClusterRole is applied but intentionally not
+  yet bound anywhere (correctly deferred to per-namespace
+  `RoleBinding`s at registration time, not cluster bootstrap).
+- `homelab#215` (Phase 10, hlctl integration): **schema + validation
+  half done** — `mcpTools:` app.yaml block + `hlctl app validate`
+  support shipped. **Still open**: the deploy-time ConfigMap authoring
+  + `register_app` JSON-RPC call — nothing yet actually registers an
+  app with a running mcp2rest.
+- `homelab#217` (this session's upstream-credential design):
+  acknowledged and picked up by the hlctl team as part of the same
+  in-progress registration work — not started yet.
+- **Phase 12 (`homelab-catalog#103`, MeTube pilot)**: manifest/template
+  authoring not started; blocked on `homelab#215`'s registration half.
+
+**Net effect**: real end-to-end testing (an agent calling a real
+MeTube-backed MCP tool through a cluster-deployed mcp2rest) is not
+possible yet — the last missing piece is `register_app` wiring in
+`homelab#215`. Once that lands, Phase 12 can exercise the whole chain.
+Local/manual testing of mcp2rest alone (running the published
+container, hand-crafting a ConfigMap + Secrets, driving it with a raw
+MCP/JSON-RPC client or `curl`) is possible today. See `tasks.md` for the
+authoritative per-phase status in this repo.
+
 ## Guiding Principles (north star for every design choice below)
 
 This plan is intentionally still being designed on the fly — the
