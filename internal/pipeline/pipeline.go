@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
+	"github.com/karlrissland/homelab-api2mcp/internal/render"
 )
 
 const (
@@ -39,6 +40,9 @@ var (
 	// ErrTierForbidden reports that the caller's tier does not satisfy the
 	// requested tool's required tier.
 	ErrTierForbidden = errors.New("caller tier does not satisfy tool tier")
+	// ErrPassthroughNotSupported reports that passthrough tools have not yet
+	// been wired into the real dispatch path.
+	ErrPassthroughNotSupported = errors.New("passthrough tools are not yet supported")
 	// ErrNilCallContext reports misuse of the executor API.
 	ErrNilCallContext = errors.New("nil call context")
 )
@@ -51,9 +55,13 @@ type CallContext struct {
 	APIKey   string
 	App      manifest.App
 	ToolName string
+	Args     map[string]any
 
-	Caller Caller
-	Tool   manifest.Tool
+	Caller        Caller
+	Tool          manifest.Tool
+	RenderContext render.Context
+	RenderResult  render.Result
+	ResultContent string
 }
 
 // Caller is the authenticated identity for the current request.
@@ -158,6 +166,20 @@ func DefaultStages(keys map[string]KeyRecord) []Stage {
 		PlaceholderStage(upstreamCallStageName),
 		PlaceholderStage(renderResponseStageName),
 		PlaceholderStage(respondStageName),
+	}
+}
+
+// RuntimeStages returns the real Phase 6 execution chain backed by a
+// dynamic key lookup and internal/render.
+func RuntimeStages(lookup KeyLookup, renderer ToolRenderer) []Stage {
+	return []Stage{
+		NewAuthenticationStageFromLookup(lookup),
+		NewAuthorizationStage(),
+		NewToolResolveStage(),
+		NewRenderRequestStage(),
+		NewUpstreamCallStage(renderer),
+		NewRenderResponseStage(),
+		NewRespondStage(),
 	}
 }
 
