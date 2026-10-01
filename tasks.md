@@ -31,7 +31,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 |---|---|
 | done | `internal/render`: Liquid render context + execute |
 | done | Fixture manifest + `request.liquid`/`response.liquid` (Gitea) |
-| not started | Wire fixture into Phase 1's tool dispatch — `internal/render` built and tested standalone (httptest round trip); not yet called from `internal/mcpserver`'s live dispatch. Will be wired up once `internal/pipeline` (Phase 3) is integrated, since the real dispatch path is authn→authz→tool-resolve→render, not render called directly from Phase 1's echo-only handler. |
+| done | Wire fixture into Phase 1's tool dispatch — real runtime dispatch now routes authenticated per-app MCP calls through `internal/pipeline` and `internal/render.Renderer.Execute`, replacing the earlier echo-only path for rendered tools while leaving passthrough explicitly deferred. |
 | done | Integration test: full request→render→call→render→respond |
 
 ## Phase 3 — Two-tier (user/admin) authz
@@ -60,18 +60,18 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 | done | `internal/keys`: mint/store/revoke |
 | done | Secret naming: `<agent-instance>-mcp2rest-keys` |
 | not started | RBAC: namespace-label-scoped ClusterRole for Secret write |
-| not started | Integration test: minted key's Secret lands correctly + authenticates against Phase 3's authz stage — `internal/keys` has its own standalone tests (mint/store/revoke, Secret upsert via fake clientset); `internal/pipeline`'s authn stage still uses its own hardcoded dev-key map (built in parallel) and is not yet wired to `internal/keys` as the real key source. |
+| done | Integration test: minted key's Secret lands correctly + authenticates against Phase 3's authz stage — dynamic key lookup is now wired from `internal/keys.Store` into the runtime pipeline, with end-to-end tests covering Secret delivery plus authenticated rendered-tool execution. |
 
 ## Phase 6 — Management tool set + human-admin bootstrap
 
 | Status | Task |
 |---|---|
-| not started | Bootstrap admin-scope key mint-and-print-once on first startup |
-| not started | `register_app` / `deregister_app` |
-| not started | `list_apps` / `get_manifest` |
-| not started | `create_key` / `list_keys` / `revoke_key` / `rotate_key` |
-| not started | Integration test: register app live, confirm discovery without restart |
-| not started | Integration test: non-admin key rejected on all management tools |
+| done | Bootstrap admin-scope key mint-and-print-once on first startup |
+| done | `register_app` / `deregister_app` |
+| done | `list_apps` / `get_manifest` |
+| done | `create_key` / `list_keys` / `revoke_key` / `rotate_key` |
+| done | Integration test: register app live, confirm discovery without restart |
+| done | Integration test: non-admin key rejected on all management tools |
 
 ## Phase 7 — Built-in `skills` tool namespace
 
