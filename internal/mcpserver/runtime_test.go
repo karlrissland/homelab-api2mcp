@@ -5,17 +5,23 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 
 	"github.com/karlrissland/homelab-api2mcp/internal/adminapi"
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
+	"github.com/karlrissland/homelab-api2mcp/internal/skillstools"
 )
 
 func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
@@ -37,7 +43,7 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	client := fake.NewSimpleClientset()
+	client := kubernetesfake.NewSimpleClientset()
 	table, err := discovery.New(client)
 	if err != nil {
 		t.Fatalf("discovery.New() error = %v", err)
@@ -69,6 +75,29 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
+	skillGVR := schema.GroupVersionResource{Group: skillstools.Group, Version: skillstools.Version, Resource: skillstools.Resource}
+	skillClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+		skillGVR: skillstools.Kind + "List",
+	}, &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": skillstools.Group + "/" + skillstools.Version,
+			"kind":       skillstools.Kind,
+			"metadata": map[string]any{
+				"name":      "mcp2rest-usage",
+				"namespace": "default",
+				"labels":    map[string]any{"skills.homelab.dev/topic": "overview"},
+			},
+			"spec": map[string]any{
+				"skillName":   "mcp2rest usage",
+				"description": "How to use mcp2rest",
+				"domain":      "mcp2rest",
+				"type":        "parent",
+				"confidence":  "high",
+				"source":      "earned",
+				"content":     "# mcp2rest",
+			},
+		},
+	})
 	adminKey, created, err := admin.EnsureBootstrapAdminKey(testWriter{t})
 	if err != nil {
 		t.Fatalf("EnsureBootstrapAdminKey() error = %v", err)
@@ -77,7 +106,7 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
 	}
 
-	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), admin)
+	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), admin, skillClient)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}
@@ -140,8 +169,13 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools() error = %v", err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "list_repos" {
-		t.Fatalf("ListTools() = %+v, want one list_repos tool", tools.Tools)
+	names := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+	}
+	slices.Sort(names)
+	if got, want := strings.Join(names, ","), "get_skill,list_repos,list_skills"; got != want {
+		t.Fatalf("ListTools() names = %q, want %q", got, want)
 	}
 
 	callResult, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{
@@ -156,6 +190,33 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	}
 	if got := strings.TrimSpace(joinedText(callResult)); got != "octocat/hello-world" {
 		t.Fatalf("CallTool(list_repos) text = %q, want %q", got, "octocat/hello-world")
+	}
+
+	listSkills, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_skills"})
+	if err != nil {
+		t.Fatalf("CallTool(list_skills) error = %v", err)
+	}
+	if listSkills.IsError {
+		t.Fatalf("list_skills tool error: %s", joinedText(listSkills))
+	}
+	decodedSkills := decodeStructured[skillstools.ListSkillsResult](t, listSkills.StructuredContent)
+	if len(decodedSkills.Skills) != 1 || decodedSkills.Skills[0].Name != "mcp2rest-usage" {
+		t.Fatalf("list_skills structured result = %+v, want mcp2rest-usage summary", decodedSkills)
+	}
+
+	getSkill, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "get_skill",
+		Arguments: map[string]any{"name": "mcp2rest-usage"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(get_skill) error = %v", err)
+	}
+	if getSkill.IsError {
+		t.Fatalf("get_skill tool error: %s", joinedText(getSkill))
+	}
+	decodedSkill := decodeStructured[skillstools.GetSkillResult](t, getSkill.StructuredContent)
+	if decodedSkill.Skill.Spec.Content != "# mcp2rest" {
+		t.Fatalf("get_skill structured result = %+v, want full skill content", decodedSkill)
 	}
 }
 
@@ -205,6 +266,20 @@ func joinedText(result *mcp.CallToolResult) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+func decodeStructured[T any](t *testing.T, value any) T {
+	t.Helper()
+
+	var out T
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return out
 }
 
 func waitForDiscoveredApp(t *testing.T, table *discovery.Table, appName string) {

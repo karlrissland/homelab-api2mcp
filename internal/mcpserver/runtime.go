@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"k8s.io/client-go/dynamic"
 
 	"github.com/karlrissland/homelab-api2mcp/internal/adminapi"
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
@@ -14,6 +15,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 	"github.com/karlrissland/homelab-api2mcp/internal/pipeline"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
+	"github.com/karlrissland/homelab-api2mcp/internal/skillstools"
 )
 
 const managementPath = "/mcp"
@@ -23,6 +25,7 @@ type runtimeHandler struct {
 	store    *keys.Store
 	renderer *render.Renderer
 	admin    *adminapi.API
+	skills   *skillstools.API
 	handler  *mcp.StreamableHTTPHandler
 }
 
@@ -31,9 +34,10 @@ type route struct {
 	management bool
 }
 
-// NewRuntimeHandler builds the real Phase 6 HTTP surface: management tools on
-// /mcp and per-app proxied tools on /{app}/mcp.
-func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *render.Renderer, admin *adminapi.API) (http.Handler, error) {
+// NewRuntimeHandler builds the runtime HTTP surface: management tools on
+// /mcp, per-app proxied tools on /{app}/mcp, and the built-in Phase 7
+// skills tools on both management and per-app routes.
+func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *render.Renderer, admin *adminapi.API, skillClient dynamic.Interface) (http.Handler, error) {
 	switch {
 	case table == nil:
 		return nil, fmt.Errorf("new runtime handler: discovery table is required")
@@ -43,6 +47,8 @@ func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *rend
 		return nil, fmt.Errorf("new runtime handler: renderer is required")
 	case admin == nil:
 		return nil, fmt.Errorf("new runtime handler: admin api is required")
+	case skillClient == nil:
+		return nil, fmt.Errorf("new runtime handler: skill client is required")
 	}
 
 	rh := &runtimeHandler{
@@ -51,6 +57,11 @@ func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *rend
 		renderer: renderer,
 		admin:    admin,
 	}
+	skills, err := skillstools.New(skillClient, rh.lookupKey)
+	if err != nil {
+		return nil, fmt.Errorf("new runtime handler: create skills api: %w", err)
+	}
+	rh.skills = skills
 	rh.handler = mcp.NewStreamableHTTPHandler(rh.serverForRequest, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,
@@ -82,6 +93,8 @@ func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 
 	apiKey := bearerToken(req)
 	if rt.management {
+		h.skills.RegisterReadTools(server, apiKey)
+		h.skills.RegisterWriteTools(server, apiKey)
 		h.admin.RegisterTools(server, apiKey)
 		return server
 	}
@@ -90,6 +103,7 @@ func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 	if !ok {
 		return server
 	}
+	h.skills.RegisterReadTools(server, apiKey)
 	h.registerAppTools(server, *app, apiKey)
 	return server
 }

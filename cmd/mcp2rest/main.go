@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -32,9 +33,14 @@ func main() {
 
 	log.Printf("mcp2rest %s starting on %s", version, addr)
 
-	client, err := kubernetes.NewForConfig(mustClusterConfig())
+	cfg := mustClusterConfig()
+	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		log.Fatalf("mcp2rest: create kubernetes client: %v", err)
+	}
+	skillClient, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		log.Fatalf("mcp2rest: create dynamic skill client: %v", err)
 	}
 
 	table, err := discovery.New(client)
@@ -61,7 +67,7 @@ func main() {
 		log.Fatalf("mcp2rest: bootstrap admin key: %v", err)
 	}
 
-	handler, err := mcpserver.NewRuntimeHandler(table, store, render.New(http.DefaultClient), admin)
+	handler, err := mcpserver.NewRuntimeHandler(table, store, render.New(http.DefaultClient), admin, skillClient)
 	if err != nil {
 		log.Fatalf("mcp2rest: create runtime handler: %v", err)
 	}
