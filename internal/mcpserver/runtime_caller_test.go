@@ -120,7 +120,8 @@ func TestRuntimeHandlerCallerUsernameImpersonationRoundTrip(t *testing.T) {
 		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
 	}
 
-	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), admin, skillClient)
+	metrics, logger, metricsHandler := testRuntimeObservability(t)
+	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), admin, skillClient, metrics, logger, metricsHandler)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}

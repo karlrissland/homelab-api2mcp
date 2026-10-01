@@ -131,6 +131,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
 	}
 
+	metrics, logger, metricsHandler := testRuntimeObservability(t)
 	handler, err := NewRuntimeHandler(
 		table,
 		store,
@@ -138,6 +139,9 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 		passthrough.New(upstream.Client()),
 		admin,
 		skillClient,
+		metrics,
+		logger,
+		metricsHandler,
 	)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)

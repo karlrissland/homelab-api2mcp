@@ -11,12 +11,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
 )
 
 const (
+	metricsStageName        = "metrics"
+	loggingStageName        = "logging"
 	authnStageName          = "authn"
 	authzStageName          = "authz"
 	toolResolveStageName    = "tool-resolve"
@@ -66,6 +69,8 @@ type CallContext struct {
 	RenderContext render.Context
 	RenderResult  render.Result
 	ResultContent string
+
+	finalizers []func(error)
 }
 
 // Caller is the authenticated identity for the current request.
@@ -145,15 +150,22 @@ func NewExecutor(stages ...Stage) *Executor {
 
 // Run executes each stage in order and stops at the first error.
 func (e *Executor) Run(ctx context.Context, call *CallContext) error {
+	var err error
+
 	if call == nil {
 		return ErrNilCallContext
 	}
+	defer func() {
+		call.runFinalizers(err)
+	}()
+
 	for _, stage := range e.stages {
-		if err := stage.Handle(ctx, call); err != nil {
-			return &StageError{Stage: stage.Name(), Err: err}
+		if handleErr := stage.Handle(ctx, call); handleErr != nil {
+			err = &StageError{Stage: stage.Name(), Err: handleErr}
+			return err
 		}
 	}
-	return nil
+	return err
 }
 
 // DefaultStages returns the Phase 3 stage chain in architectural order.
@@ -175,8 +187,10 @@ func DefaultStages(keys map[string]KeyRecord) []Stage {
 
 // RuntimeStages returns the real runtime execution chain backed by a
 // dynamic key lookup, internal/render, and optional passthrough relay.
-func RuntimeStages(lookup KeyLookup, renderer ToolRenderer, relay PassthroughRelay) []Stage {
+func RuntimeStages(lookup KeyLookup, renderer ToolRenderer, relay PassthroughRelay, metrics *Metrics, logger *slog.Logger) []Stage {
 	return []Stage{
+		NewMetricsStage(metrics),
+		NewLoggingStage(logger),
 		NewAuthenticationStageFromLookup(lookup),
 		NewAuthorizationStage(),
 		NewToolResolveStage(),
@@ -193,4 +207,17 @@ func resolveTool(app manifest.App, toolName string) (manifest.Tool, error) {
 		return manifest.Tool{}, fmt.Errorf("%w: app %q does not expose tool %q", ErrToolNotFound, app.Name, toolName)
 	}
 	return tool, nil
+}
+
+func (c *CallContext) addFinalizer(fn func(error)) {
+	if fn == nil {
+		return
+	}
+	c.finalizers = append(c.finalizers, fn)
+}
+
+func (c *CallContext) runFinalizers(err error) {
+	for _, fn := range c.finalizers {
+		fn(err)
+	}
 }

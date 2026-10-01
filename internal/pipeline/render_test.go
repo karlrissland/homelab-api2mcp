@@ -39,7 +39,7 @@ func TestRuntimeStagesRenderedTool(t *testing.T) {
 			return KeyRecord{}, false
 		}
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, renderer, nil)...).Run(context.Background(), call)
+	}, renderer, nil, nil, nil)...).Run(context.Background(), call)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -81,7 +81,7 @@ func TestRuntimeStagesPassthroughTool(t *testing.T) {
 
 	err := NewExecutor(RuntimeStages(func(string) (KeyRecord, bool) {
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, &stubRenderer{}, relay)...).Run(context.Background(), call)
+	}, &stubRenderer{}, relay, nil, nil)...).Run(context.Background(), call)
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestRuntimeStagesPassthroughRejectedWithoutRelay(t *testing.T) {
 
 	err := NewExecutor(RuntimeStages(func(key string) (KeyRecord, bool) {
 		return KeyRecord{AgentInstance: "agent-a", Tier: manifest.TierUser}, true
-	}, &stubRenderer{}, nil)...).Run(context.Background(), call)
+	}, &stubRenderer{}, nil, nil, nil)...).Run(context.Background(), call)
 	if !errors.Is(err, ErrPassthroughNotSupported) {
 		t.Fatalf("Run() error = %v, want ErrPassthroughNotSupported", err)
 	}

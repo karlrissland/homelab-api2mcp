@@ -3,6 +3,8 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +13,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -21,6 +25,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
 	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
+	"github.com/karlrissland/homelab-api2mcp/internal/pipeline"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
 	"github.com/karlrissland/homelab-api2mcp/internal/skillstools"
 )
@@ -107,7 +112,8 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
 	}
 
-	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), admin, skillClient)
+	metrics, logger, metricsHandler := testRuntimeObservability(t)
+	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), admin, skillClient, metrics, logger, metricsHandler)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}
@@ -257,6 +263,18 @@ func connectHTTPClient(t *testing.T, endpoint, token string) *mcp.ClientSession 
 		t.Fatalf("client.Connect(%s) error = %v", endpoint, err)
 	}
 	return session
+}
+
+func testRuntimeObservability(t *testing.T) (*pipeline.Metrics, *slog.Logger, http.Handler) {
+	t.Helper()
+
+	registry := prometheus.NewRegistry()
+	metrics, err := pipeline.NewMetrics(registry)
+	if err != nil {
+		t.Fatalf("pipeline.NewMetrics() error = %v", err)
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	return metrics, logger, promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 }
 
 func joinedText(result *mcp.CallToolResult) string {

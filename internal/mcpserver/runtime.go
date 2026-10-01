@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -19,6 +20,7 @@ import (
 )
 
 const managementPath = "/mcp"
+const metricsPath = "/metrics"
 
 // callerUsernameArgument is a reserved top-level tool argument used to
 // carry the end-user identity an agent is acting on behalf of for one
@@ -36,6 +38,9 @@ type runtimeHandler struct {
 	relay    pipeline.PassthroughRelay
 	admin    *adminapi.API
 	skills   *skillstools.API
+	metrics  *pipeline.Metrics
+	logger   *slog.Logger
+	metricsH http.Handler
 	handler  *mcp.StreamableHTTPHandler
 }
 
@@ -44,10 +49,21 @@ type route struct {
 	management bool
 }
 
-// NewRuntimeHandler builds the runtime HTTP surface: management tools on
-// /mcp, per-app proxied tools on /{app}/mcp, and the built-in Phase 7
-// skills tools on both management and per-app routes.
-func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *render.Renderer, relay pipeline.PassthroughRelay, admin *adminapi.API, skillClient dynamic.Interface) (http.Handler, error) {
+// NewRuntimeHandler builds the runtime HTTP surface: Prometheus metrics on
+// /metrics, management tools on /mcp, per-app proxied tools on /{app}/mcp,
+// and the built-in Phase 7 skills tools on both management and per-app
+// routes.
+func NewRuntimeHandler(
+	table *discovery.Table,
+	store *keys.Store,
+	renderer *render.Renderer,
+	relay pipeline.PassthroughRelay,
+	admin *adminapi.API,
+	skillClient dynamic.Interface,
+	metrics *pipeline.Metrics,
+	logger *slog.Logger,
+	metricsHandler http.Handler,
+) (http.Handler, error) {
 	switch {
 	case table == nil:
 		return nil, fmt.Errorf("new runtime handler: discovery table is required")
@@ -60,6 +76,9 @@ func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *rend
 	case skillClient == nil:
 		return nil, fmt.Errorf("new runtime handler: skill client is required")
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	rh := &runtimeHandler{
 		table:    table,
@@ -67,6 +86,9 @@ func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *rend
 		renderer: renderer,
 		relay:    relay,
 		admin:    admin,
+		metrics:  metrics,
+		logger:   logger,
+		metricsH: metricsHandler,
 	}
 	skills, err := skillstools.New(skillClient, rh.lookupKey)
 	if err != nil {
@@ -81,6 +103,11 @@ func NewRuntimeHandler(table *discovery.Table, store *keys.Store, renderer *rend
 }
 
 func (h *runtimeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if req.URL.Path == metricsPath && h.metricsH != nil {
+		h.metricsH.ServeHTTP(w, req)
+		return
+	}
+
 	rt, ok := parseRoute(req.URL.Path)
 	if !ok {
 		http.NotFound(w, req)
@@ -143,7 +170,7 @@ func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, 
 				Args:           toolArgs,
 				CallerUsername: callerUsername,
 			}
-			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer, h.relay)
+			stages := pipeline.RuntimeStages(h.lookupKey, h.renderer, h.relay, h.metrics, h.logger)
 			if err := pipeline.NewExecutor(stages...).Run(ctx, call); err != nil {
 				return nil, nil, err
 			}

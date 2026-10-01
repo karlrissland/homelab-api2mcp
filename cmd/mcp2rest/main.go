@@ -6,10 +6,13 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -19,6 +22,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
 	"github.com/karlrissland/homelab-api2mcp/internal/mcpserver"
 	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
+	"github.com/karlrissland/homelab-api2mcp/internal/pipeline"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
 )
 
@@ -27,46 +31,62 @@ import (
 var version = "dev"
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
 	addr := os.Getenv("MCP2REST_ADDR")
 	if addr == "" {
 		addr = ":8080"
 	}
 
-	log.Printf("mcp2rest %s starting on %s", version, addr)
+	logger.Info("mcp2rest starting", "version", version, "addr", addr)
 
 	cfg := mustClusterConfig()
 	client, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		log.Fatalf("mcp2rest: create kubernetes client: %v", err)
+		fatal("create kubernetes client", err)
 	}
 	skillClient, err := dynamic.NewForConfig(cfg)
 	if err != nil {
-		log.Fatalf("mcp2rest: create dynamic skill client: %v", err)
+		fatal("create dynamic skill client", err)
 	}
 
 	table, err := discovery.New(client)
 	if err != nil {
-		log.Fatalf("mcp2rest: create discovery table: %v", err)
+		fatal("create discovery table", err)
 	}
 	ctx := context.Background()
 	go func() {
 		if err := table.Run(ctx); err != nil {
-			log.Fatalf("mcp2rest: discovery table stopped: %v", err)
+			fatal("discovery table stopped", err)
 		}
 	}()
 
 	store := keys.NewStore()
 	writer, err := keys.NewSecretWriter(client)
 	if err != nil {
-		log.Fatalf("mcp2rest: create secret writer: %v", err)
+		fatal("create secret writer", err)
 	}
 	admin, err := adminapi.New(client, table, store, writer)
 	if err != nil {
-		log.Fatalf("mcp2rest: create admin api: %v", err)
+		fatal("create admin api", err)
 	}
 	if _, _, err := admin.EnsureBootstrapAdminKey(os.Stderr); err != nil {
-		log.Fatalf("mcp2rest: bootstrap admin key: %v", err)
+		fatal("bootstrap admin key", err)
 	}
+
+	registry := prometheus.NewRegistry()
+	if err := registry.Register(collectors.NewGoCollector()); err != nil {
+		fatal("register go collector", err)
+	}
+	if err := registry.Register(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{})); err != nil {
+		fatal("register process collector", err)
+	}
+	metrics, err := pipeline.NewMetrics(registry)
+	if err != nil {
+		fatal("create metrics", err)
+	}
+	metricsHandler := promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 
 	handler, err := mcpserver.NewRuntimeHandler(
 		table,
@@ -75,20 +95,28 @@ func main() {
 		passthrough.New(http.DefaultClient),
 		admin,
 		skillClient,
+		metrics,
+		logger,
+		metricsHandler,
 	)
 	if err != nil {
-		log.Fatalf("mcp2rest: create runtime handler: %v", err)
+		fatal("create runtime handler", err)
 	}
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
-		log.Fatalf("mcp2rest: server failed: %v", err)
+		fatal("server failed", err)
 	}
 }
 
 func mustClusterConfig() *rest.Config {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
-		log.Fatalf("mcp2rest: load in-cluster kubernetes config: %v", err)
+		fatal("load in-cluster kubernetes config", err)
 	}
 	return cfg
+}
+
+func fatal(msg string, err error) {
+	slog.Error("mcp2rest fatal", "message", msg, "error", err)
+	os.Exit(1)
 }
