@@ -1,0 +1,41 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: mcp2rest-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: mcp2rest.rules
+      interval: 30s
+      rules:
+        - alert: MCP2RestHighErrorRate
+          expr: |
+            (
+              sum(rate(mcp2rest_tool_requests_total{outcome!="success"}[10m]))
+              /
+              clamp_min(sum(rate(mcp2rest_tool_requests_total[10m])), 0.001)
+            ) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+            app: mcp2rest
+          annotations:
+            summary: "mcp2rest error rate is above 5%"
+            description: "More than 5% of proxied mcp2rest tool calls have failed for 10 minutes."
+
+        - alert: MCP2RestNoSuccessfulRequests
+          expr: |
+            sum(increase(mcp2rest_tool_requests_total[15m])) > 0
+            and
+            sum(increase(mcp2rest_tool_requests_total{outcome="success"}[15m])) == 0
+          for: 5m
+          labels:
+            severity: warning
+            app: mcp2rest
+          annotations:
+            summary: "mcp2rest is receiving traffic but no requests are succeeding"
+            description: "mcp2rest has handled proxied requests in the last 15 minutes, but none completed successfully."
