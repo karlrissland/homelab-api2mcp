@@ -188,3 +188,20 @@ credentials).
 | done | Unit tests: manifest fallback methods, `upstreamcreds` cache (incl. fail-open + deregister-drop behavior), pipeline credential binding, passthrough header injection, adminapi `reload_cache` |
 | done | File/update a `homelab` issue: hlctl must write `<app-instance>-api-keys`/`<app-instance>-mcp-keys` Secrets (converging/upsert semantics) into mcp2rest's namespace, and bind the new namespaced Role to mcp2rest's ServiceAccount — filed `homelab#217` |
 | done | Reply to/close `homelab-api2mcp#1` summarizing the implemented design |
+
+## Phase 17 — `get_key` admin tool (homelab-api2mcp#2)
+
+Resolves `homelab-api2mcp#2` (flat `keys.json` array has no tier/app
+metadata, blocking hlctl from reliably resolving a user-tier key for
+OpenClaw auth-header wiring). See `docs/decisions/mcp2rest-plan.md`
+§3.9 for the full resolved design: a narrow, explicit exception to
+"hlctl never touches raw key material," scoped to config-templated MCP
+client registrations (OpenClaw's `provision-mcp-server.sh`) that have no
+indirect secret-reference mechanism of their own.
+
+| Status | Task |
+|---|---|
+| done | `internal/adminapi`: new admin-tier `get_key(agentInstance, namespace, tier)` MCP tool; resolves tier server-side by cross-referencing the Secret's raw key array against mcp2rest's own in-memory key store (same resolution `ensureTierKey`/`appendTierKey` already perform) -- no `keys.json` format change |
+| done | Unit tests: `TestGetKeyResolvesByTierNotArrayPosition`, non-admin-rejection coverage for `get_key` |
+| done | Reply to/close `homelab-api2mcp#2` summarizing the resolution |
+| done | Comment on `homelab#220` directing hlctl to call `get_key` instead of reading the Secret directly |
