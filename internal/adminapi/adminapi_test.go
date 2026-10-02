@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -322,6 +323,56 @@ func TestManagementToolsRejectNonAdminKey(t *testing.T) {
 	}
 }
 
+// TestListToolsOutputSchemasAreObjectTyped guards against homelab-api2mcp#3:
+// an array/null-typed top-level outputSchema on any tool caused strict MCP
+// clients (e.g. OpenClaw's Zod validation) to reject the whole server
+// connection, not just the offending tool.
+func TestListToolsOutputSchemasAreObjectTyped(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t)
+	adminKey, err := api.store.Mint("cluster-admin", manifest.TierAdmin)
+	if err != nil {
+		t.Fatalf("Mint(admin) error = %v", err)
+	}
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "admin-test", Version: "0.0.0"}, nil)
+	api.RegisterTools(server, adminKey)
+	session := connectSession(t, server)
+	defer func() { _ = session.Close() }()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+
+	checked := map[string]bool{}
+	for _, tool := range tools.Tools {
+		if tool.OutputSchema == nil {
+			continue
+		}
+		var schemaType string
+		switch schema := tool.OutputSchema.(type) {
+		case *jsonschema.Schema:
+			schemaType = schema.Type
+		case map[string]any:
+			schemaType, _ = schema["type"].(string)
+		default:
+			t.Errorf("tool %q outputSchema has unexpected type %T", tool.Name, tool.OutputSchema)
+			continue
+		}
+		if schemaType != "object" {
+			t.Errorf("tool %q outputSchema.type = %q, want %q", tool.Name, schemaType, "object")
+		}
+		checked[tool.Name] = true
+	}
+	for _, name := range []string{"list_apps", "list_keys"} {
+		if !checked[name] {
+			t.Errorf("tool %q did not report an outputSchema at all; expected an object-typed one", name)
+		}
+	}
+}
+
 func newTestAPI(t *testing.T) *API {
 	t.Helper()
 
@@ -496,9 +547,9 @@ func TestRegisterToolRoundTrip(t *testing.T) {
 	if listResult.IsError {
 		t.Fatalf("list_apps tool error: %s", textContent(t, listResult))
 	}
-	apps := decodeStructured[[]manifest.App](t, listResult.StructuredContent)
-	if len(apps) != 1 || apps[0].Name != "demo" {
-		t.Fatalf("list_apps structured result = %+v, want one demo app", apps)
+	listApps := decodeStructured[ListAppsResult](t, listResult.StructuredContent)
+	if len(listApps.Apps) != 1 || listApps.Apps[0].Name != "demo" {
+		t.Fatalf("list_apps structured result = %+v, want one demo app", listApps)
 	}
 
 	manifestResult, err := session.CallTool(context.Background(), &mcp.CallToolParams{

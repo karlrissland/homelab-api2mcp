@@ -59,6 +59,22 @@ type RegisterAppResult struct {
 	CreatedUserKeys []KeyRecord `json:"createdUserKeys"`
 }
 
+// ListAppsResult wraps list_apps' array payload in an object. The MCP
+// spec requires every tool outputSchema to be an object schema even when
+// the primary payload is array-shaped -- a bare array/null union at the
+// top level fails strict client-side schema validation and can abort an
+// MCP client's entire connection to this server, not just this one tool
+// (see homelab-api2mcp#3).
+type ListAppsResult struct {
+	Apps []*manifest.App `json:"apps"`
+}
+
+// ListKeysResult wraps list_keys' array payload in an object, for the
+// same reason as ListAppsResult (homelab-api2mcp#3).
+type ListKeysResult struct {
+	Keys []KeyRecord `json:"keys"`
+}
+
 // DeregisterAppParams removes an app's registration ConfigMap.
 type DeregisterAppParams struct {
 	Namespace     string `json:"namespace" jsonschema:"Namespace owning the app ConfigMap"`
@@ -255,11 +271,11 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_apps",
 		Description: "List manifests currently visible in the live discovery table.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, []*manifest.App, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListAppsResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
-			return nil, nil, err
+			return nil, ListAppsResult{}, err
 		}
-		return nil, a.table.List(), nil
+		return nil, ListAppsResult{Apps: a.table.List()}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -287,11 +303,11 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_keys",
 		Description: "List known key records. Raw key material is never returned after mint time.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, []KeyRecord, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListKeysResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
-			return nil, nil, err
+			return nil, ListKeysResult{}, err
 		}
-		return nil, a.ListKeys(ctx), nil
+		return nil, ListKeysResult{Keys: a.ListKeys(ctx)}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
