@@ -226,6 +226,62 @@ func TestCreateRevokeRotateKeyUpdatesSecret(t *testing.T) {
 	}
 }
 
+func TestGetKeyResolvesByTierNotArrayPosition(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t)
+	ctx := context.Background()
+
+	userKey, err := api.CreateKey(ctx, CreateKeyParams{
+		AgentInstance: "hermes-alice",
+		Namespace:     "agents",
+		Tier:          manifest.TierUser,
+	})
+	if err != nil {
+		t.Fatalf("CreateKey(user) error = %v", err)
+	}
+	adminKey, err := api.CreateKey(ctx, CreateKeyParams{
+		AgentInstance: "hermes-alice",
+		Namespace:     "agents",
+		Tier:          manifest.TierAdmin,
+	})
+	if err != nil {
+		t.Fatalf("CreateKey(admin) error = %v", err)
+	}
+
+	gotUser, err := api.GetKey(ctx, GetKeyParams{
+		AgentInstance: "hermes-alice",
+		Namespace:     "agents",
+		Tier:          manifest.TierUser,
+	})
+	if err != nil {
+		t.Fatalf("GetKey(user) error = %v", err)
+	}
+	if gotUser.Key != userKey.Key {
+		t.Fatalf("GetKey(user).Key = %q, want %q", gotUser.Key, userKey.Key)
+	}
+
+	gotAdmin, err := api.GetKey(ctx, GetKeyParams{
+		AgentInstance: "hermes-alice",
+		Namespace:     "agents",
+		Tier:          manifest.TierAdmin,
+	})
+	if err != nil {
+		t.Fatalf("GetKey(admin) error = %v", err)
+	}
+	if gotAdmin.Key != adminKey.Key {
+		t.Fatalf("GetKey(admin).Key = %q, want %q", gotAdmin.Key, adminKey.Key)
+	}
+
+	if _, err := api.GetKey(ctx, GetKeyParams{
+		AgentInstance: "no-such-agent",
+		Namespace:     "agents",
+		Tier:          manifest.TierUser,
+	}); err == nil {
+		t.Fatal("GetKey() for unknown agent instance returned nil error, want error")
+	}
+}
+
 func TestManagementToolsRejectNonAdminKey(t *testing.T) {
 	t.Parallel()
 
@@ -246,6 +302,7 @@ func TestManagementToolsRejectNonAdminKey(t *testing.T) {
 		{Name: "list_apps"},
 		{Name: "get_manifest", Arguments: map[string]any{"appName": "demo"}},
 		{Name: "create_key", Arguments: map[string]any{"agentInstance": "hermes-alice", "namespace": "agents", "tier": "user"}},
+		{Name: "get_key", Arguments: map[string]any{"agentInstance": "hermes-alice", "namespace": "agents", "tier": "user"}},
 		{Name: "list_keys"},
 		{Name: "revoke_key", Arguments: map[string]any{"namespace": "agents", "agentInstance": "hermes-alice", "tier": "user"}},
 		{Name: "rotate_key", Arguments: map[string]any{"agentInstance": "hermes-alice", "namespace": "agents", "tier": "user"}},

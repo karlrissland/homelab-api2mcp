@@ -101,6 +101,31 @@ type CreateKeyResult struct {
 	Key           string        `json:"key"`
 }
 
+// GetKeyParams requests the current raw key for one agent instance+tier.
+type GetKeyParams struct {
+	AgentInstance string        `json:"agentInstance" jsonschema:"Agent instance name"`
+	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the key Secret"`
+	Tier          manifest.Tier `json:"tier" jsonschema:"Tier to fetch: user or admin"`
+}
+
+// GetKeyResult returns the current raw key material for one agent+tier.
+//
+// This is a narrow, deliberate exception to mcp2rest's normal "raw key
+// material never leaves mcp2rest except at mint time" posture (see
+// docs/decisions/mcp2rest-plan.md's "hlctl never touches raw key material"
+// principle). It exists only for callers that must bake a literal
+// credential value into another system's own static config at deploy time
+// (e.g. hlctl writing HLCTL_MCP_AUTH_HEADER_VALUE for OpenClaw's
+// provision-mcp-server hook, which has no indirect secret-reference
+// mechanism of its own) and still requires the caller to hold mcp2rest's
+// own admin scope.
+type GetKeyResult struct {
+	AgentInstance string        `json:"agentInstance"`
+	Namespace     string        `json:"namespace"`
+	Tier          manifest.Tier `json:"tier"`
+	Key           string        `json:"key"`
+}
+
 // RevokeKeyParams revokes either one raw key or every key matching an
 // agent+tier in the target Secret.
 type RevokeKeyParams struct {
@@ -270,6 +295,19 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_key",
+		Description: "Fetch the current raw key for one agent instance+tier. Admin tier required. " +
+			"Narrow exception to mcp2rest's normal key-delivery model, for callers (e.g. hlctl) that must " +
+			"bake a literal credential value into another system's own static config at deploy time.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetKeyParams) (*mcp.CallToolResult, GetKeyResult, error) {
+		if err := a.requireAdmin(apiKey); err != nil {
+			return nil, GetKeyResult{}, err
+		}
+		result, err := a.GetKey(ctx, params)
+		return nil, result, err
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name:        "revoke_key",
 		Description: "Revoke either one raw key or every key matching an agent instance and tier.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params RevokeKeyParams) (*mcp.CallToolResult, RevokeKeyResult, error) {
@@ -428,6 +466,35 @@ func (a *API) ListKeys(context.Context) []KeyRecord {
 		out = append(out, formatKeyRecord(record))
 	}
 	return out
+}
+
+// GetKey returns the current raw key for one agent instance+tier, resolved
+// by cross-referencing the Secret's raw key array against mcp2rest's own
+// in-memory key store (the same resolution ensureTierKey already performs
+// internally) rather than relying on Secret array ordering or shape.
+func (a *API) GetKey(ctx context.Context, params GetKeyParams) (GetKeyResult, error) {
+	if err := validateAgentTierParams(params.AgentInstance, params.Namespace, params.Tier, "get key"); err != nil {
+		return GetKeyResult{}, err
+	}
+
+	rawKeys, err := a.writer.ReadSecretKeys(ctx, params.AgentInstance, params.Namespace)
+	if err != nil {
+		return GetKeyResult{}, fmt.Errorf("get key for %s/%s: read secret keys: %w", params.Namespace, params.AgentInstance, err)
+	}
+
+	for _, rawKey := range rawKeys {
+		record, ok := a.store.Lookup(rawKey)
+		if ok && record.AgentInstance == params.AgentInstance && record.Tier == params.Tier {
+			return GetKeyResult{
+				AgentInstance: params.AgentInstance,
+				Namespace:     params.Namespace,
+				Tier:          params.Tier,
+				Key:           rawKey,
+			}, nil
+		}
+	}
+
+	return GetKeyResult{}, fmt.Errorf("get key for %s/%s: no %s-tier key found", params.Namespace, params.AgentInstance, params.Tier)
 }
 
 // RevokeKey removes one or more keys and updates the owning Secret.

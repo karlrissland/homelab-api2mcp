@@ -399,6 +399,45 @@ through a dedicated design conversation. Final design:
   `http.Client` (the Go MCP SDK's `StreamableClientTransport` has no
   native `Headers` field). No per-app configurable auth scheme in v1.
 
+### 3.9 `get_key` admin tool — narrow exception to "hlctl never touches raw key material" (added 2026-10-02, RESOLVED)
+
+`homelab-api2mcp#2` flagged that `keys.json` (the per-instance key Secret,
+§3.3/Open Decision 6) stores raw keys as a flat `[]string` with no
+tier/app metadata, leaving array position as the only (undocumented)
+signal for "which entry is the current user-tier key." Investigating the
+actual driver (`homelab#220`, wiring mcp2rest auth into OpenClaw's MCP
+registration) surfaced a real conflict with this plan's repeated "hlctl
+never receives or stores any per-agent key" principle (§3.1, §5.2, Open
+Decisions 3/5): OpenClaw's own MCP client config format
+(`mcp.servers.<name>.headers` in `openclaw.json`, written by
+`provision-mcp-server.sh`) has **no indirect secret-reference
+mechanism** — it requires a literal header value baked in in-place at
+deploy time. Apps whose MCP client config is templated this way (the
+same pattern Hermes already uses for `provisionMcpServer`) genuinely
+cannot "mount the Secret and read it themselves" the way an agent's own
+long-running container can.
+
+**Resolved**: rather than changing `keys.json`'s shape (which would
+matter only if hlctl started reading Secrets directly — requiring new,
+broad K8s RBAC for hlctl to read arbitrary agent-namespace Secrets, the
+exact privilege-creep Open Decision 6 was written to avoid), mcp2rest
+gained a new admin-scoped management tool: **`get_key(agentInstance,
+namespace, tier) → rawKey`**. hlctl (already an MCP client for
+`register_app`) calls this with its own bootstrap key when it needs a
+literal credential value for a config-templated hook like OpenClaw's.
+
+This is a **narrow, explicit exception** to "hlctl never touches raw key
+material" — not a reversal of it. The exception is scoped to exactly
+this documented need (config-templated MCP client registration with no
+secret-ref mechanism of its own); hlctl still does not receive or store
+keys for the normal case (an agent instance's own long-running
+container, which still gets its key via the Secret mcp2rest writes into
+its namespace, per §3.3/Open Decision 6, unchanged). `keys.json`'s shape
+is unchanged — `get_key` resolves tier server-side by cross-referencing
+the Secret's raw array against mcp2rest's own in-memory key store (the
+same resolution `ensureTierKey`/`appendTierKey` already perform
+internally), so no Secret-format migration was needed.
+
 ## 4. Open Decisions — confirm before/at implementation kickoff
 
 Flagging these explicitly rather than assuming, matching this org's own
