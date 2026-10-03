@@ -277,8 +277,11 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_apps",
-		Description: "List manifests currently visible in the live discovery table.",
+		Name: "list_apps",
+		Description: "List every app registered with mcp2rest, from the live discovery table. Admin tier " +
+			"required. Returns app names and their declared tools/schemas only -- it does NOT return a " +
+			"connection URL or any API key. Each app's own MCP endpoint is always " +
+			"https://mcp2rest.<dns-zone>/{app-name}/mcp.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListAppsResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ListAppsResult{}, err
@@ -287,8 +290,13 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_manifest",
-		Description: "Fetch one manifest from the live discovery table by app name.",
+		Name: "get_manifest",
+		Description: "Fetch one app's full internal manifest (tool names, descriptions, input schemas, " +
+			"tiers) by app name. Admin tier required. This is read-only documentation of what that app's " +
+			"own MCP endpoint will expose -- it does NOT register, connect, or add the tool to any agent " +
+			"or harness, and does NOT return a connection URL or API key. To actually call this app's " +
+			"tools, connect a new MCP client/server entry to https://mcp2rest.<dns-zone>/{app-name}/mcp, " +
+			"authenticated with that agent instance's own key from its <agent-instance>-mcp2rest-keys Secret.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetManifestParams) (*mcp.CallToolResult, manifest.App, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, manifest.App{}, err

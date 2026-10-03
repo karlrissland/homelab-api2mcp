@@ -125,15 +125,73 @@ func (h *runtimeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	h.handler.ServeHTTP(w, req)
 }
 
+// managementInstructions is sent as this session's MCP `instructions`
+// field (initialize result) when connecting to mcp2rest's own reserved
+// /mcp management path -- the control plane, not a proxied app. Agents
+// landing here by mistake (e.g. expecting an app's actual tools) need to
+// immediately understand this is the wrong endpoint for that.
+const managementInstructions = `You are connected to mcp2rest's MANAGEMENT endpoint (/mcp), not a proxied app.
+
+mcp2rest is a shared REST-to-MCP proxy for homelab apps. This endpoint only
+exposes mcp2rest's own control-plane tools (register_app, deregister_app,
+list_apps, get_manifest, create_key, list_keys, revoke_key, rotate_key) plus
+the built-in Skill documentation tools (list_skills, get_skill, and -- admin
+tier only -- create_skill/update_skill/delete_skill). These tools manage
+mcp2rest itself and other apps' registrations; they do NOT call any app's
+actual REST API.
+
+Most management tools require an admin-tier API key.
+
+To actually call a registered app's real tools (e.g. a download, a query, a
+write to that app's own API), connect to that app's OWN endpoint instead:
+  https://mcp2rest.<dns-zone>/{app-name}/mcp
+(the app-name used is the one shown by list_apps or get_manifest).
+
+Workflow for onboarding a new app's tools into an agent harness:
+ 1. Call list_apps (admin key) or get_manifest(app) here to see what apps
+    exist and their declared tools/schemas.
+ 2. Configure your MCP client/harness with a NEW server entry pointing at
+    https://mcp2rest.<dns-zone>/{app-name}/mcp, authenticated with a
+    per-agent-instance key (delivered via that agent's own
+    <agent-instance>-mcp2rest-keys Kubernetes Secret, keys.json field).
+ 3. Reconnect/add that server in your harness -- get_manifest alone does
+    not register or add anything automatically; there is no MCP
+    self-registration mechanism.`
+
+// appInstructions is sent as this session's MCP `instructions` field when
+// connecting to one specific registered app's proxied path
+// (/{app-name}/mcp). Keep this generic/app-name-driven -- never special-
+// cased to any one app -- since every registered app shares this same
+// runtime path.
+func appInstructions(appName string) string {
+	return fmt.Sprintf(`You are connected to mcp2rest's proxy for the %q app (not mcp2rest itself).
+
+mcp2rest is a shared REST-to-MCP proxy: every tool listed in this session's
+tools/list is a real call into %q's own REST API, rendered through that
+app's Liquid request/response templates -- not a tool belonging to mcp2rest
+generically. Tool names, parameters, and behavior are specific to %q; they
+do not apply to any other app registered with mcp2rest.
+
+This session also exposes read-only Skill documentation tools
+(list_skills, get_skill) shared across the whole cluster, independent of
+%q -- useful for background/API documentation, not for calling %q itself.
+
+Only tools your API key's tier (user or admin) is authorized for are
+listed here; calling an unlisted/unauthorized tool name will be rejected.
+Each app has its own tool set and its own endpoint path
+(https://mcp2rest.<dns-zone>/{app-name}/mcp) -- tools from other apps are
+never available on this session.`, appName, appName, appName, appName, appName)
+}
+
 func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 	rt, ok := parseRoute(req.URL.Path)
-	server := mcp.NewServer(Info, nil)
 	if !ok {
-		return server
+		return mcp.NewServer(Info, nil)
 	}
 
 	apiKey := bearerToken(req)
 	if rt.management {
+		server := mcp.NewServer(Info, &mcp.ServerOptions{Instructions: managementInstructions})
 		h.skills.RegisterReadTools(server, apiKey)
 		h.skills.RegisterWriteTools(server, apiKey)
 		h.admin.RegisterTools(server, apiKey)
@@ -142,8 +200,9 @@ func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 
 	app, ok := h.table.Get(rt.appName)
 	if !ok {
-		return server
+		return mcp.NewServer(Info, nil)
 	}
+	server := mcp.NewServer(Info, &mcp.ServerOptions{Instructions: appInstructions(app.Name)})
 	h.skills.RegisterReadTools(server, apiKey)
 	server.AddReceivingMiddleware(appToolListFilter(*app, apiKey, h.lookupKey))
 	h.registerAppTools(server, *app, apiKey)

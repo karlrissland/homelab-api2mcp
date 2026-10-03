@@ -18,6 +18,12 @@ import (
 var Info = &mcp.Implementation{
 	Name:    "mcp2rest",
 	Version: "0.1.0",
+	Description: "mcp2rest is a shared REST-to-MCP proxy: it exposes " +
+		"other homelab apps' REST APIs as real MCP tools, one tool set " +
+		"per registered app at its own /{app-name}/mcp path. It is not " +
+		"an app itself -- it has no tools or data of its own beyond the " +
+		"management and skills surfaces described in this session's " +
+		"instructions.",
 }
 
 // New builds an MCP server with the echo tool registered.

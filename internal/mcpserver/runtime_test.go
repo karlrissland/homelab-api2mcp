@@ -124,6 +124,13 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	adminSession := connectHTTPClient(t, server.URL+managementPath, adminKey)
 	defer func() { _ = adminSession.Close() }()
 
+	if got := adminSession.InitializeResult().Instructions; !strings.Contains(got, "MANAGEMENT endpoint") {
+		t.Fatalf("management session Instructions = %q, want it to identify the management endpoint", got)
+	}
+	if got := adminSession.InitializeResult().ServerInfo.Description; got == "" {
+		t.Fatal("management session ServerInfo.Description is empty, want a description of mcp2rest")
+	}
+
 	registerResult, err := adminSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "register_app",
 		Arguments: map[string]any{
@@ -172,6 +179,10 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 
 	appSession := connectHTTPClient(t, server.URL+"/demo/mcp", rawKeys[0])
 	defer func() { _ = appSession.Close() }()
+
+	if got := appSession.InitializeResult().Instructions; !strings.Contains(got, `"demo"`) {
+		t.Fatalf("app session Instructions = %q, want it to name the connected app", got)
+	}
 
 	tools, err := appSession.ListTools(context.Background(), nil)
 	if err != nil {

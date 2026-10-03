@@ -244,3 +244,20 @@ This single store-level toggle covers every call site that checks a key
 `tools/list` filtering, and `adminapi`/`skillstools`'s own
 `requireAdmin` checks) because they all ultimately read through the same
 `*keys.Store` instance -- no separate flag needed per subsystem.
+
+## Phase 20 — MCP session `instructions` and sharper tool descriptions
+
+OpenClaw was getting confused about what mcp2rest is and how to use it
+(e.g. trying to pass `get_manifest` output as if it both registered and
+connected a tool). Root cause: every MCP session -- management and
+per-app alike -- passed `nil` `ServerOptions` to `mcp.NewServer`, so the
+`initialize` result's `instructions` field (the MCP-spec-blessed "how to
+use this server" field) was always empty, and `Info` (the
+`Implementation` sent as `serverInfo`) had no `Description` either.
+
+| Status | Task |
+|---|---|
+| done | `internal/mcpserver.Info`: add a `Description` explaining mcp2rest is a shared REST-to-MCP proxy, not an app itself |
+| done | `internal/mcpserver/runtime.go`: build distinct `ServerOptions.Instructions` per route -- `managementInstructions` for `/mcp` (explains this is the control plane, most tools need admin tier, and that calling an app's real tools means connecting a NEW session to that app's own `/{app-name}/mcp` endpoint) and `appInstructions(appName)` for `/{app}/mcp` (explains these tools are real REST calls into that specific app, generic/app-name-driven so it's never a one-off for any single app) |
+| done | `internal/adminapi`: sharpen `list_apps`/`get_manifest` tool descriptions to explicitly state they do NOT return a connection URL or API key and do NOT register/connect anything by themselves |
+| done | Regression test: assert `InitializeResult().Instructions`/`.ServerInfo.Description` are non-empty and route-appropriate for both a management and an app session |
