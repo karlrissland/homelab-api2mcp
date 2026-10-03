@@ -28,11 +28,16 @@ type Record struct {
 // Store is an in-memory key store keyed by the SHA-256 digest of the raw
 // API key. The raw key is returned once from Mint and is never retained.
 type Store struct {
-	mu       sync.RWMutex
-	records  map[[sha256.Size]byte]Record
-	now      func() time.Time
-	encoding *base64.Encoding
+	mu          sync.RWMutex
+	records     map[[sha256.Size]byte]Record
+	now         func() time.Time
+	encoding    *base64.Encoding
+	disableAuth bool
 }
+
+// insecureAuthDisabledAgentInstance is the synthetic AgentInstance on the
+// record DisableAuth's Lookup bypass always returns.
+const insecureAuthDisabledAgentInstance = "auth-disabled"
 
 // NewStore builds an empty in-memory key store.
 func NewStore() *Store {
@@ -76,8 +81,33 @@ func (s *Store) Mint(agentInstance string, tier manifest.Tier) (string, error) {
 	return key, nil
 }
 
+// DisableAuth puts the store into an insecure "auth disabled" mode: every
+// Lookup call succeeds with a synthetic admin-tier record, regardless of
+// the key (or lack of a key) presented. This is a temporary operational
+// escape hatch (env var MCP2REST_DISABLE_AUTH, see cmd/mcp2rest/main.go)
+// to reduce moving parts while debugging unrelated issues -- it disables
+// authn/authz cluster-wide for every app and every management/skills
+// tool proxied through this mcp2rest instance. Not intended to be left on
+// in production; re-enable by unsetting the env var and restarting.
+func (s *Store) DisableAuth() {
+	s.mu.Lock()
+	s.disableAuth = true
+	s.mu.Unlock()
+}
+
 // Lookup returns the metadata associated with a raw API key.
 func (s *Store) Lookup(key string) (Record, bool) {
+	s.mu.RLock()
+	disabled := s.disableAuth
+	s.mu.RUnlock()
+	if disabled {
+		return Record{
+			AgentInstance: insecureAuthDisabledAgentInstance,
+			Tier:          manifest.TierAdmin,
+			CreatedAt:     s.now().UTC(),
+		}, true
+	}
+
 	if key == "" {
 		return Record{}, false
 	}

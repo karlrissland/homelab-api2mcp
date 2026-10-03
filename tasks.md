@@ -224,3 +224,23 @@ redeploy.
 | done | Rename `RegisterAppResult.CreatedUserKeys` -> `CreatedKeys` (field could now legitimately contain admin-tier keys) |
 | done | Unit test `TestRegisterAppMintsKeyTierFromAuthorizedAgent`: admin-tier agent gets an admin key even when the registering app's manifest only declares user-tier tools; omitted tier defaults to user; invalid tier is rejected |
 | done | Reply to/close `homelab-api2mcp#4` summarizing the fix |
+
+## Phase 19 — `MCP2REST_DISABLE_AUTH` escape hatch
+
+Operational request: temporarily disable authn/authz cluster-wide to
+reduce moving parts while troubleshooting an unrelated OpenClaw/MeTube
+onboarding issue, without ripping out the pipeline stages themselves.
+
+| Status | Task |
+|---|---|
+| done | `internal/keys.Store`: add `DisableAuth()` -- once called, `Lookup` succeeds unconditionally (synthetic admin-tier record), for any key including an empty one |
+| done | `internal/pipeline` authn stage: reorder the empty-key check after the lookup call, so a lookup that is unconditionally OK (e.g. a disabled store) can authenticate a request with no key presented at all |
+| done | `cmd/mcp2rest/main.go`: read `MCP2REST_DISABLE_AUTH=true`, call `store.DisableAuth()` and log a loud warning at startup |
+| done | Unit tests: `TestStoreDisableAuthBypassesEveryLookup`, `TestAuthenticationStageAllowsEmptyKeyWhenLookupIsAlwaysOK` |
+| done | `README.md`: document the env var as a debugging-only escape hatch, not for production |
+
+This single store-level toggle covers every call site that checks a key
+(per-app tool calls' authn/authz stages, `appToolListFilter`'s
+`tools/list` filtering, and `adminapi`/`skillstools`'s own
+`requireAdmin` checks) because they all ultimately read through the same
+`*keys.Store` instance -- no separate flag needed per subsystem.

@@ -36,3 +36,9 @@ go run ./cmd/mcp2rest
 ```
 
 Listens on `:8080` by default (override with `MCP2REST_ADDR`).
+
+Set `MCP2REST_DISABLE_AUTH=true` to run with authentication/authorization
+disabled cluster-wide: every request (per-app, management, and skills
+tools) is treated as an authenticated admin-tier caller, regardless of any
+key presented. This is a temporary debugging escape hatch only — never
+run with this set in production.

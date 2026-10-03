@@ -42,6 +42,35 @@ func TestStoreMintLookupRevoke(t *testing.T) {
 	}
 }
 
+func TestStoreDisableAuthBypassesEveryLookup(t *testing.T) {
+	now := time.Date(2026, time.October, 3, 15, 0, 0, 0, time.UTC)
+	store := newStore(func() time.Time { return now })
+
+	// Sanity check: before DisableAuth, an unknown/empty key is rejected
+	// as usual.
+	if _, ok := store.Lookup("never-minted"); ok {
+		t.Fatal("Lookup() succeeded for an unminted key before DisableAuth()")
+	}
+	if _, ok := store.Lookup(""); ok {
+		t.Fatal("Lookup() succeeded for an empty key before DisableAuth()")
+	}
+
+	store.DisableAuth()
+
+	for _, key := range []string{"", "anything", "never-minted"} {
+		record, ok := store.Lookup(key)
+		if !ok {
+			t.Fatalf("Lookup(%q) = not found after DisableAuth(), want success", key)
+		}
+		if record.Tier != manifest.TierAdmin {
+			t.Fatalf("Lookup(%q).Tier = %q after DisableAuth(), want %q", key, record.Tier, manifest.TierAdmin)
+		}
+		if !record.CreatedAt.Equal(now) {
+			t.Fatalf("Lookup(%q).CreatedAt = %v after DisableAuth(), want %v", key, record.CreatedAt, now)
+		}
+	}
+}
+
 func TestStoreList(t *testing.T) {
 	now := time.Date(2026, time.September, 30, 17, 30, 0, 0, time.UTC)
 	store := newStore(func() time.Time { return now })

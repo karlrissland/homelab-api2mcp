@@ -49,12 +49,16 @@ func DevKeys() map[string]KeyRecord {
 func authenticationHandler(lookup KeyLookup) StageFunc {
 	resolvedLookup := cloneLookupFn(lookup)
 	return func(_ context.Context, call *CallContext) error {
-		if call.APIKey == "" {
-			return ErrMissingAPIKey
-		}
-
+		// The empty-key check is ordered after the lookup (rather than
+		// short-circuiting first) so an auth-disabled lookup
+		// (keys.Store.DisableAuth) -- which succeeds unconditionally,
+		// even for an empty key -- can still authenticate a caller with
+		// no key presented at all.
 		record, ok := resolvedLookup(call.APIKey)
 		if !ok {
+			if call.APIKey == "" {
+				return ErrMissingAPIKey
+			}
 			return ErrInvalidAPIKey
 		}
 		if !record.Tier.Valid() {

@@ -68,6 +68,10 @@ func main() {
 	}()
 
 	store := keys.NewStore()
+	if os.Getenv("MCP2REST_DISABLE_AUTH") == "true" {
+		logger.Warn("MCP2REST_DISABLE_AUTH=true: authentication and authorization are DISABLED cluster-wide; every request (per-app, management, and skills tools) is treated as an authenticated admin-tier caller regardless of any key presented. Temporary debugging escape hatch only -- do not run in production.")
+		store.DisableAuth()
+	}
 	writer, err := keys.NewSecretWriter(client)
 	if err != nil {
 		fatal("create secret writer", err)

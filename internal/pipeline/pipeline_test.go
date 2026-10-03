@@ -9,6 +9,26 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 )
 
+func TestAuthenticationStageAllowsEmptyKeyWhenLookupIsAlwaysOK(t *testing.T) {
+	t.Parallel()
+
+	// Mirrors keys.Store.DisableAuth()'s behavior: Lookup succeeds
+	// unconditionally, even for an empty key, so the authn stage must not
+	// short-circuit on an empty APIKey before consulting the lookup.
+	alwaysOK := func(string) (KeyRecord, bool) {
+		return KeyRecord{AgentInstance: "auth-disabled", Tier: manifest.TierAdmin}, true
+	}
+
+	call := &CallContext{APIKey: ""}
+	stage := NewAuthenticationStageFromLookup(alwaysOK)
+	if err := stage.Handle(context.Background(), call); err != nil {
+		t.Fatalf("Handle() error = %v, want nil", err)
+	}
+	if call.Caller.Tier != manifest.TierAdmin {
+		t.Fatalf("Caller.Tier = %q, want %q", call.Caller.Tier, manifest.TierAdmin)
+	}
+}
+
 func TestDefaultStagesOrder(t *testing.T) {
 	stages := DefaultStages(nil)
 
