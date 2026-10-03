@@ -1,0 +1,25 @@
+fix: register_app mints key tier from AuthorizedAgent.tier (#4)
+
+register_app previously always minted a user-tier key for every entry
+in authorizedAgents, ignoring the agent instance's own role.
+AuthorizedAgent had no tier field at all, so even after homelab#223's
+hlctl-side fix started sending one, mcp2rest silently dropped it. An
+Admin-tier agent (e.g. hlctl's Cluster Agent singleton) never got an
+admin-tier key minted via registration, breaking its later
+get_key(tier: admin) call indefinitely with no self-healing on
+redeploy.
+
+- Add AuthorizedAgent.Tier (manifest.Tier, optional, defaults to user
+  for backward compatibility with callers not yet sending it).
+- RegisterApp now mints/ensures a key matching each agent's own
+  declared tier instead of a hardcoded user tier, independent of
+  whatever tool tiers the registering app's manifest declares.
+- Reject an explicitly-set invalid tier rather than silently coercing
+  it.
+- Rename RegisterAppResult.CreatedUserKeys -> CreatedKeys, since the
+  field can now legitimately contain admin-tier keys.
+- Add TestRegisterAppMintsKeyTierFromAuthorizedAgent covering the
+  admin-tier case, the omitted-tier default, and invalid-tier
+  rejection.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>

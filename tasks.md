@@ -205,3 +205,22 @@ indirect secret-reference mechanism of their own.
 | done | Unit tests: `TestGetKeyResolvesByTierNotArrayPosition`, non-admin-rejection coverage for `get_key` |
 | done | Reply to/close `homelab-api2mcp#2` summarizing the resolution |
 | done | Comment on `homelab#220` directing hlctl to call `get_key` instead of reading the Secret directly |
+
+## Phase 18 — `register_app` mints key tier from `AuthorizedAgent.tier` (homelab-api2mcp#4)
+
+Resolves `homelab-api2mcp#4`: `register_app` always minted a `user`-tier
+key for every entry in `authorizedAgents`, ignoring the agent instance's
+own role. `AuthorizedAgent` had no `tier` field at all, so even after
+`homelab#223`'s hlctl-side fix started sending one, mcp2rest silently
+dropped it -- an Admin-tier agent (e.g. hlctl's Cluster Agent singleton)
+never got an admin-tier key minted via registration, breaking its later
+`get_key(tier: admin)` call indefinitely, with no self-healing on
+redeploy.
+
+| Status | Task |
+|---|---|
+| done | `internal/adminapi`: add `AuthorizedAgent.Tier` (`manifest.Tier`, optional, defaults to `user`); `RegisterApp` now mints/ensures a key matching each agent's own declared tier instead of a hardcoded `user` tier |
+| done | Validate an explicitly-set invalid tier is rejected (not silently coerced) |
+| done | Rename `RegisterAppResult.CreatedUserKeys` -> `CreatedKeys` (field could now legitimately contain admin-tier keys) |
+| done | Unit test `TestRegisterAppMintsKeyTierFromAuthorizedAgent`: admin-tier agent gets an admin key even when the registering app's manifest only declares user-tier tools; omitted tier defaults to user; invalid tier is rejected |
+| done | Reply to/close `homelab-api2mcp#4` summarizing the fix |

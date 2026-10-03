@@ -38,9 +38,17 @@ type API struct {
 }
 
 // AuthorizedAgent identifies one agent instance that should hold a key.
+//
+// Tier is a property of the agent instance itself (e.g. hlctl's Admin-tier
+// Cluster Agent singleton), not of the registering app's own manifest tool
+// tiers -- register_app mints/ensures a key matching this field directly,
+// independent of whatever tool tiers the app declares (homelab-api2mcp#4).
+// Tier is optional and defaults to manifest.TierUser for backward
+// compatibility with callers sent before this field existed.
 type AuthorizedAgent struct {
-	AgentInstance string `json:"agentInstance" jsonschema:"Agent instance name"`
-	Namespace     string `json:"namespace" jsonschema:"Namespace holding the agent Secret"`
+	AgentInstance string        `json:"agentInstance" jsonschema:"Agent instance name"`
+	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the agent Secret"`
+	Tier          manifest.Tier `json:"tier,omitempty" jsonschema:"Tier the agent instance itself holds: user or admin; defaults to user if omitted"`
 }
 
 // RegisterAppParams declares a management-tool registration call.
@@ -48,15 +56,15 @@ type RegisterAppParams struct {
 	Namespace        string            `json:"namespace" jsonschema:"Namespace owning the app ConfigMap"`
 	ConfigMapName    string            `json:"configMapName,omitempty" jsonschema:"Optional explicit ConfigMap name; defaults to <app>-mcp2rest"`
 	Manifest         manifest.App      `json:"manifest" jsonschema:"Full manifest.App payload to validate and persist"`
-	AuthorizedAgents []AuthorizedAgent `json:"authorizedAgents,omitempty" jsonschema:"Agent instances that must hold a user-tier key"`
+	AuthorizedAgents []AuthorizedAgent `json:"authorizedAgents,omitempty" jsonschema:"Agent instances that must each hold a key matching their own declared tier"`
 }
 
 // RegisterAppResult reports what register_app changed.
 type RegisterAppResult struct {
-	AppName         string      `json:"appName"`
-	Namespace       string      `json:"namespace"`
-	ConfigMapName   string      `json:"configMapName"`
-	CreatedUserKeys []KeyRecord `json:"createdUserKeys"`
+	AppName       string      `json:"appName"`
+	Namespace     string      `json:"namespace"`
+	ConfigMapName string      `json:"configMapName"`
+	CreatedKeys   []KeyRecord `json:"createdKeys"`
 }
 
 // ListAppsResult wraps list_apps' array payload in an object. The MCP
@@ -358,7 +366,9 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 }
 
 // RegisterApp validates and persists one manifest and ensures each authorized
-// agent instance holds a user-tier key.
+// agent instance holds a key matching its own declared tier (defaulting to
+// user when omitted), independent of which tool tiers this app's manifest
+// happens to declare (homelab-api2mcp#4).
 func (a *API) RegisterApp(ctx context.Context, params RegisterAppParams) (RegisterAppResult, error) {
 	if strings.TrimSpace(params.Namespace) == "" {
 		return RegisterAppResult{}, fmt.Errorf("register app: namespace is required")
@@ -382,7 +392,14 @@ func (a *API) RegisterApp(ctx context.Context, params RegisterAppParams) (Regist
 
 	createdKeys := make([]KeyRecord, 0, len(params.AuthorizedAgents))
 	for _, agent := range params.AuthorizedAgents {
-		key, created, err := a.ensureTierKey(ctx, agent.AgentInstance, agent.Namespace, manifest.TierUser)
+		tier := agent.Tier
+		if tier == "" {
+			tier = manifest.TierUser
+		}
+		if !tier.Valid() {
+			return RegisterAppResult{}, fmt.Errorf("register app %q: agent %s/%s: invalid tier %q", app.Name, agent.Namespace, agent.AgentInstance, agent.Tier)
+		}
+		key, created, err := a.ensureTierKey(ctx, agent.AgentInstance, agent.Namespace, tier)
 		if err != nil {
 			return RegisterAppResult{}, fmt.Errorf("register app %q: ensure key for %s/%s: %w", app.Name, agent.Namespace, agent.AgentInstance, err)
 		}
@@ -393,10 +410,10 @@ func (a *API) RegisterApp(ctx context.Context, params RegisterAppParams) (Regist
 	}
 
 	return RegisterAppResult{
-		AppName:         app.Name,
-		Namespace:       params.Namespace,
-		ConfigMapName:   configMapName,
-		CreatedUserKeys: createdKeys,
+		AppName:       app.Name,
+		Namespace:     params.Namespace,
+		ConfigMapName: configMapName,
+		CreatedKeys:   createdKeys,
 	}, nil
 }
 

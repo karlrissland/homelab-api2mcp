@@ -66,8 +66,8 @@ func TestRegisterAppCreatesSecretAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterApp(first) error = %v", err)
 	}
-	if len(result.CreatedUserKeys) != 1 {
-		t.Fatalf("RegisterApp(first) created %d keys, want 1", len(result.CreatedUserKeys))
+	if len(result.CreatedKeys) != 1 {
+		t.Fatalf("RegisterApp(first) created %d keys, want 1", len(result.CreatedKeys))
 	}
 
 	secretKeys, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
@@ -82,8 +82,8 @@ func TestRegisterAppCreatesSecretAndIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterApp(second) error = %v", err)
 	}
-	if len(second.CreatedUserKeys) != 0 {
-		t.Fatalf("RegisterApp(second) created %d keys, want 0", len(second.CreatedUserKeys))
+	if len(second.CreatedKeys) != 0 {
+		t.Fatalf("RegisterApp(second) created %d keys, want 0", len(second.CreatedKeys))
 	}
 
 	again, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
@@ -92,6 +92,70 @@ func TestRegisterAppCreatesSecretAndIsIdempotent(t *testing.T) {
 	}
 	if len(again) != 1 || again[0] != secretKeys[0] {
 		t.Fatalf("secret keys after re-register = %#v, want original %#v", again, secretKeys)
+	}
+}
+
+// TestRegisterAppMintsKeyTierFromAuthorizedAgent guards against
+// homelab-api2mcp#4: key tier must come from each AuthorizedAgent's own
+// declared tier, not from whatever tool tiers the registering app's
+// manifest happens to declare. A manifest with only user-tier tools must
+// still mint an admin-tier key for an agent explicitly declared admin.
+func TestRegisterAppMintsKeyTierFromAuthorizedAgent(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDiscovery(t, api.table, ctx)
+
+	// testManifest("demo") declares only user-tier tools (see helper below).
+	params := RegisterAppParams{
+		Namespace: "apps",
+		Manifest:  testManifest("demo"),
+		AuthorizedAgents: []AuthorizedAgent{
+			{AgentInstance: "cluster-agent", Namespace: "agents", Tier: manifest.TierAdmin},
+			{AgentInstance: "hermes-bob", Namespace: "agents"}, // omitted tier -> defaults to user
+		},
+	}
+
+	if _, err := api.RegisterApp(ctx, params); err != nil {
+		t.Fatalf("RegisterApp() error = %v", err)
+	}
+
+	clusterAgentKeys, err := api.writer.ReadSecretKeys(ctx, "cluster-agent", "agents")
+	if err != nil {
+		t.Fatalf("ReadSecretKeys(cluster-agent) error = %v", err)
+	}
+	if len(clusterAgentKeys) != 1 {
+		t.Fatalf("cluster-agent secret keys = %#v, want exactly one key", clusterAgentKeys)
+	}
+	record, ok := api.store.Lookup(clusterAgentKeys[0])
+	if !ok || record.Tier != manifest.TierAdmin {
+		t.Fatalf("cluster-agent key record = %+v, ok=%t, want TierAdmin", record, ok)
+	}
+
+	hermesKeys, err := api.writer.ReadSecretKeys(ctx, "hermes-bob", "agents")
+	if err != nil {
+		t.Fatalf("ReadSecretKeys(hermes-bob) error = %v", err)
+	}
+	if len(hermesKeys) != 1 {
+		t.Fatalf("hermes-bob secret keys = %#v, want exactly one key", hermesKeys)
+	}
+	record, ok = api.store.Lookup(hermesKeys[0])
+	if !ok || record.Tier != manifest.TierUser {
+		t.Fatalf("hermes-bob key record = %+v, ok=%t, want TierUser (omitted tier default)", record, ok)
+	}
+
+	// An explicitly invalid tier must be rejected, not silently coerced.
+	badParams := RegisterAppParams{
+		Namespace: "apps",
+		Manifest:  testManifest("demo2"),
+		AuthorizedAgents: []AuthorizedAgent{
+			{AgentInstance: "hermes-carol", Namespace: "agents", Tier: manifest.Tier("superuser")},
+		},
+	}
+	if _, err := api.RegisterApp(ctx, badParams); err == nil {
+		t.Fatal("RegisterApp() with invalid agent tier returned nil error, want error")
 	}
 }
 
