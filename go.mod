@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/google/jsonschema-go v0.4.3
-	github.com/modelcontextprotocol/go-sdk v1.8.0
+	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/osteele/liquid v1.9.2
 	github.com/prometheus/client_golang v1.12.1
 	github.com/prometheus/client_model v0.2.0

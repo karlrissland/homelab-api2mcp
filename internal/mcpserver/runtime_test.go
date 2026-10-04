@@ -127,10 +127,6 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	if got := adminSession.InitializeResult().Instructions; !strings.Contains(got, "MANAGEMENT endpoint") {
 		t.Fatalf("management session Instructions = %q, want it to identify the management endpoint", got)
 	}
-	if got := adminSession.InitializeResult().ServerInfo.Description; got == "" {
-		t.Fatal("management session ServerInfo.Description is empty, want a description of mcp2rest")
-	}
-
 	registerResult, err := adminSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "register_app",
 		Arguments: map[string]any{

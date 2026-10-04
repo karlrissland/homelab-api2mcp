@@ -303,3 +303,29 @@ this information, so the agent had no in-band way to rediscover it.
 | done | `internal/adminapi`: add `mcpEndpointPath(appName)` helper (`"/" + appName + "/mcp"`, mirrors `runtime.go`'s routing convention); populate it on copies returned by `list_apps` and `get_manifest` (never mutate the discovery table's own stored `*manifest.App` pointers) |
 | done | Sharpen `list_apps`/`get_manifest` tool descriptions to point at the new field, spell out the full external URL template, and explicitly warn that calling a listed tool name on the current session will fail |
 | done | Regression tests: assert `MCPEndpointPath` is populated correctly via both `API.GetManifest` and a real `list_apps`/`get_manifest` tool-call round trip |
+
+## Phase 23 — Pin go-sdk below SEP-2549 "Cacheable list results" (OpenClaw strict-schema rejection)
+
+OpenClaw reported `list_apps`/a proxied app's `tools/list` response had
+"additional properties that don't match the expected schema" and refused
+to use the tool at all. Root cause: `github.com/modelcontextprotocol/go-sdk`
+v1.7.0+ unconditionally embeds two new top-level fields -- `ttlMs` and
+`cacheScope` -- on every `tools/list`, `prompts/list`, `resources/list`,
+`resources/templates/list`, and `resources/read` result (SEP-2549,
+shipped in the go-sdk's `2026-07-28` protocol-version release). These
+fields have no `omitempty` and are NOT gated by the negotiated protocol
+version, so they appear even when the client negotiates the stable
+`2024-11-05`/`2025-06-18` protocol -- a backward-compatibility gap in the
+SDK itself. Any MCP client (like OpenClaw) that strictly validates a
+result against the stable, published `ListToolsResult` JSON Schema (which
+has no `ttlMs`/`cacheScope` properties and typically `additionalProperties:
+false`) rejects the response outright.
+
+| Status | Task |
+|---|---|
+| done | Pin `github.com/modelcontextprotocol/go-sdk` to `v1.6.1` (last version before SEP-2549's `Cacheable` fields and the `Implementation.Description` field were introduced) |
+| done | `internal/mcpserver.Info`: drop `Description` (not present on `mcp.Implementation` in v1.6.1) -- the equivalent guidance already lives entirely in the per-session `Instructions` string (Phase 20), so no information is lost |
+| done | Drop the one test assertion on `ServerInfo.Description` (`internal/mcpserver/runtime_test.go`) |
+| done | Verified via an ad hoc local test that a live `tools/list` round trip no longer contains `ttlMs`/`cacheScope`/`serverInfo.description` |
+| done | Full build/vet/test/lint clean after the downgrade |
+| note | Revisit pinning once go-sdk either version-gates SEP-2549 fields to the negotiated protocol version, or OpenClaw's client stops strictly validating against the pre-SEP-2549 schema -- tracked here, not a permanent architectural decision |
