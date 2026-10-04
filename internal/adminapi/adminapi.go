@@ -650,11 +650,16 @@ func (a *API) RotateKey(ctx context.Context, params RotateKeyParams) (RotateKeyR
 }
 
 func (a *API) requireAdmin(apiKey string) error {
-	if apiKey == "" {
-		return fmt.Errorf("admin key is required")
-	}
+	// Look up before checking for an empty key: when the store has
+	// auth disabled (MCP2REST_DISABLE_AUTH), Lookup succeeds
+	// unconditionally, including for an empty key. Checking apiKey == ""
+	// first would bypass that and always reject no-key callers even
+	// with auth disabled.
 	record, ok := a.store.Lookup(apiKey)
 	if !ok {
+		if apiKey == "" {
+			return fmt.Errorf("admin key is required")
+		}
 		return fmt.Errorf("admin key is invalid")
 	}
 	if !record.Tier.Satisfies(manifest.TierAdmin) {

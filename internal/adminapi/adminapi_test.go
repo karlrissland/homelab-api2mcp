@@ -17,6 +17,44 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 )
 
+func TestRequireAdminAllowsEmptyKeyWhenAuthDisabled(t *testing.T) {
+	t.Parallel()
+
+	client := fake.NewSimpleClientset()
+	table, err := discovery.New(client)
+	if err != nil {
+		t.Fatalf("discovery.New() error = %v", err)
+	}
+	store := keys.NewStore()
+	store.DisableAuth()
+	writer, err := keys.NewSecretWriter(client)
+	if err != nil {
+		t.Fatalf("keys.NewSecretWriter() error = %v", err)
+	}
+	api, err := New(client, table, store, writer, &stubCredentialReloader{})
+	if err != nil {
+		t.Fatalf("adminapi.New() error = %v", err)
+	}
+
+	// Regression test: requireAdmin used to short-circuit on an empty
+	// apiKey before ever consulting the store, so MCP2REST_DISABLE_AUTH
+	// never actually bypassed admin-only tools like list_apps/get_manifest
+	// for callers presenting no key at all.
+	if err := api.requireAdmin(""); err != nil {
+		t.Fatalf("requireAdmin(\"\") with auth disabled = %v, want nil", err)
+	}
+}
+
+func TestRequireAdminRejectsEmptyKeyWhenAuthEnabled(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t)
+
+	if err := api.requireAdmin(""); err == nil {
+		t.Fatal("requireAdmin(\"\") with auth enabled = nil error, want an error")
+	}
+}
+
 func TestEnsureBootstrapAdminKeyPrintsOnce(t *testing.T) {
 	t.Parallel()
 

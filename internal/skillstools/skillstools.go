@@ -384,11 +384,16 @@ func (a *API) DeleteSkill(ctx context.Context, params DeleteSkillParams) (Delete
 }
 
 func (a *API) requireAuthenticated(apiKey string) (pipeline.KeyRecord, error) {
-	if apiKey == "" {
-		return pipeline.KeyRecord{}, fmt.Errorf("api key is required")
-	}
+	// Look up before checking for an empty key: when the store has auth
+	// disabled (MCP2REST_DISABLE_AUTH), lookup succeeds unconditionally,
+	// including for an empty key. Checking apiKey == "" first would
+	// bypass that and always reject no-key callers even with auth
+	// disabled.
 	record, ok := a.lookup(apiKey)
 	if !ok {
+		if apiKey == "" {
+			return pipeline.KeyRecord{}, fmt.Errorf("api key is required")
+		}
 		return pipeline.KeyRecord{}, fmt.Errorf("api key is invalid")
 	}
 	if !record.Tier.Valid() {

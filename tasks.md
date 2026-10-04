@@ -240,10 +240,13 @@ onboarding issue, without ripping out the pipeline stages themselves.
 | done | `README.md`: document the env var as a debugging-only escape hatch, not for production |
 
 This single store-level toggle covers every call site that checks a key
-(per-app tool calls' authn/authz stages, `appToolListFilter`'s
-`tools/list` filtering, and `adminapi`/`skillstools`'s own
-`requireAdmin` checks) because they all ultimately read through the same
-`*keys.Store` instance -- no separate flag needed per subsystem.
+(per-app tool calls' authn/authz stages and `appToolListFilter`'s
+`tools/list` filtering) because they all ultimately read through the
+same `*keys.Store` instance -- no separate flag needed per subsystem.
+**Correction (see Phase 21): `adminapi`/`skillstools`'s own
+`requireAdmin` checks were NOT actually covered by this toggle at the
+time this phase was written** -- they each had their own empty-key
+short-circuit that ran before ever consulting the store.
 
 ## Phase 20 — MCP session `instructions` and sharper tool descriptions
 
@@ -261,3 +264,22 @@ use this server" field) was always empty, and `Info` (the
 | done | `internal/mcpserver/runtime.go`: build distinct `ServerOptions.Instructions` per route -- `managementInstructions` for `/mcp` (explains this is the control plane, most tools need admin tier, and that calling an app's real tools means connecting a NEW session to that app's own `/{app-name}/mcp` endpoint) and `appInstructions(appName)` for `/{app}/mcp` (explains these tools are real REST calls into that specific app, generic/app-name-driven so it's never a one-off for any single app) |
 | done | `internal/adminapi`: sharpen `list_apps`/`get_manifest` tool descriptions to explicitly state they do NOT return a connection URL or API key and do NOT register/connect anything by themselves |
 | done | Regression test: assert `InitializeResult().Instructions`/`.ServerInfo.Description` are non-empty and route-appropriate for both a management and an app session |
+
+## Phase 21 — Fix `requireAdmin`/`requireAuthenticated` empty-key short-circuit
+
+Live-cluster bug found while validating `MCP2REST_DISABLE_AUTH=true` end
+to end: `adminapi.requireAdmin` and `skillstools.requireAuthenticated`
+(used by `skillstools.requireAdmin`) each rejected an empty `apiKey`
+*before* ever calling into the key store, so a disabled store's
+unconditional-success `Lookup` was never consulted for admin-tier tool
+calls. Result: `initialize` succeeded with no key (handled by the
+pipeline's authn stage, already fixed in Phase 19), but calling
+`list_apps`/`get_manifest`/`create_skill`/etc. with no key still failed
+with "admin key is required" even with auth disabled cluster-wide.
+
+| Status | Task |
+|---|---|
+| done | `internal/adminapi.requireAdmin`: reorder to call `store.Lookup` first; only check `apiKey == ""` to pick the error message once lookup has already failed |
+| done | `internal/skillstools.requireAuthenticated`: same reordering (its `requireAdmin` calls through to it) |
+| done | Regression tests: `TestRequireAdminAllowsEmptyKeyWhenAuthDisabled`/`TestRequireAdminRejectsEmptyKeyWhenAuthEnabled` in both `adminapi` and `skillstools` packages |
+| done | Verified live: `kubectl set env deployment/mcp2rest -n mcp2rest MCP2REST_DISABLE_AUTH=true`, confirmed a no-key `tools/call list_apps` failed before this fix and (after rebuild/redeploy) should succeed |

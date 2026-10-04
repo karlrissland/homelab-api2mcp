@@ -235,6 +235,54 @@ type testCredentials struct {
 	userKey  string
 }
 
+func TestRequireAdminAllowsEmptyKeyWhenAuthDisabled(t *testing.T) {
+	t.Parallel()
+
+	scheme := runtime.NewScheme()
+	client := fake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
+		skillGVR: Kind + "List",
+	})
+
+	store := keys.NewStore()
+	store.DisableAuth()
+
+	api, err := New(client, func(key string) (pipeline.KeyRecord, bool) {
+		record, ok := store.Lookup(key)
+		if !ok {
+			return pipeline.KeyRecord{}, false
+		}
+		return pipeline.KeyRecord{
+			AgentInstance: record.AgentInstance,
+			Tier:          record.Tier,
+		}, true
+	})
+	if err != nil {
+		t.Fatalf("skillstools.New() error = %v", err)
+	}
+
+	// Regression test: requireAuthenticated/requireAdmin used to
+	// short-circuit on an empty apiKey before ever consulting the
+	// lookup function, so MCP2REST_DISABLE_AUTH never actually bypassed
+	// admin-only skill tools (create_skill/update_skill/delete_skill)
+	// for callers presenting no key at all.
+	if err := api.requireAdmin(""); err != nil {
+		t.Fatalf("requireAdmin(\"\") with auth disabled = %v, want nil", err)
+	}
+	if _, err := api.requireAuthenticated(""); err != nil {
+		t.Fatalf("requireAuthenticated(\"\") with auth disabled = %v, want nil", err)
+	}
+}
+
+func TestRequireAdminRejectsEmptyKeyWhenAuthEnabled(t *testing.T) {
+	t.Parallel()
+
+	api, _ := newTestAPI(t)
+
+	if err := api.requireAdmin(""); err == nil {
+		t.Fatal("requireAdmin(\"\") with auth enabled = nil error, want an error")
+	}
+}
+
 func newTestAPI(t *testing.T, objects ...runtime.Object) (*API, testCredentials) {
 	t.Helper()
 
