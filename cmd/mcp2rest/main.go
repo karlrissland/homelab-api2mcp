@@ -6,7 +6,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 
@@ -42,6 +44,10 @@ func main() {
 	namespace := os.Getenv("MCP2REST_NAMESPACE")
 	if namespace == "" {
 		namespace = "mcp2rest"
+	}
+	serviceName := os.Getenv("MCP2REST_SERVICE_NAME")
+	if serviceName == "" {
+		serviceName = "mcp2rest"
 	}
 
 	logger.Info("mcp2rest starting", "version", version, "addr", addr)
@@ -87,6 +93,7 @@ func main() {
 	if err != nil {
 		fatal("create admin api", err)
 	}
+	admin.SetInternalBaseURL(internalBaseURL(serviceName, namespace, addr))
 	if _, _, err := admin.EnsureBootstrapAdminKey(os.Stderr); err != nil {
 		fatal("bootstrap admin key", err)
 	}
@@ -123,6 +130,21 @@ func main() {
 	if err := http.ListenAndServe(addr, handler); err != nil {
 		fatal("server failed", err)
 	}
+}
+
+// internalBaseURL builds this mcp2rest instance's own in-cluster Service
+// base URL, e.g. "http://mcp2rest.mcp2rest.svc.cluster.local:8080". Every
+// agent harness mcp2rest serves runs inside this same cluster, so this is
+// the address those harnesses' own MCP connectors should always use --
+// never the external, ingress-fronted DNS-zone hostname, which requires
+// an extra hop and a TLS certificate an in-cluster client's trust store
+// typically does not recognize.
+func internalBaseURL(serviceName, namespace, addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		port = "8080"
+	}
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%s", serviceName, namespace, port)
 }
 
 func mustClusterConfig() *rest.Config {

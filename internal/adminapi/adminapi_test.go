@@ -260,6 +260,12 @@ func TestListAppsAndGetManifestReflectDiscovery(t *testing.T) {
 	if want := "/demo/mcp"; app.MCPEndpointPath != want {
 		t.Fatalf("GetManifest().MCPEndpointPath = %q, want %q", app.MCPEndpointPath, want)
 	}
+	// Regression test: when the internal base URL was never configured
+	// (SetInternalBaseURL not called), MCPInternalURL must stay empty
+	// rather than panicking or emitting a malformed URL.
+	if app.MCPInternalURL != "" {
+		t.Fatalf("GetManifest().MCPInternalURL = %q, want empty when internal base URL unset", app.MCPInternalURL)
+	}
 }
 
 func TestCreateRevokeRotateKeyUpdatesSecret(t *testing.T) {
@@ -599,6 +605,7 @@ func TestRegisterToolRoundTrip(t *testing.T) {
 	t.Parallel()
 
 	api := newTestAPI(t)
+	api.SetInternalBaseURL("http://mcp2rest.mcp2rest.svc.cluster.local:8080")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runDiscovery(t, api.table, ctx)
@@ -663,6 +670,13 @@ func TestRegisterToolRoundTrip(t *testing.T) {
 	if want := "/demo/mcp"; listApps.Apps[0].MCPEndpointPath != want {
 		t.Fatalf("list_apps MCPEndpointPath = %q, want %q", listApps.Apps[0].MCPEndpointPath, want)
 	}
+	// Regression test: in-cluster callers (any agent harness) must be
+	// steered toward the internal Service URL, not the external
+	// DNS-zone hostname, to avoid the TLS-trust failure that broke
+	// OpenClaw's MeTube connector in production.
+	if want := "http://mcp2rest.mcp2rest.svc.cluster.local:8080/demo/mcp"; listApps.Apps[0].MCPInternalURL != want {
+		t.Fatalf("list_apps MCPInternalURL = %q, want %q", listApps.Apps[0].MCPInternalURL, want)
+	}
 
 	manifestResult, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "get_manifest",
@@ -677,6 +691,9 @@ func TestRegisterToolRoundTrip(t *testing.T) {
 	gotManifest := decodeStructured[manifest.App](t, manifestResult.StructuredContent)
 	if gotManifest.Name != "demo" || gotManifest.Namespace != "apps" {
 		t.Fatalf("get_manifest structured result = %+v, want demo in apps namespace", gotManifest)
+	}
+	if want := "http://mcp2rest.mcp2rest.svc.cluster.local:8080/demo/mcp"; gotManifest.MCPInternalURL != want {
+		t.Fatalf("get_manifest MCPInternalURL = %q, want %q", gotManifest.MCPInternalURL, want)
 	}
 }
 

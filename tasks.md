@@ -329,3 +329,29 @@ false`) rejects the response outright.
 | done | Verified via an ad hoc local test that a live `tools/list` round trip no longer contains `ttlMs`/`cacheScope`/`serverInfo.description` |
 | done | Full build/vet/test/lint clean after the downgrade |
 | note | Revisit pinning once go-sdk either version-gates SEP-2549 fields to the negotiated protocol version, or OpenClaw's client stops strictly validating against the pre-SEP-2549 schema -- tracked here, not a permanent architectural decision |
+
+## Phase 24 — Surface `mcpInternalUrl` so in-cluster callers never need the external, TLS-fronted hostname
+
+Live-debugging OpenClaw found its `MeTube MCP Tool` connector was
+configured with the external ingress URL (`https://mcp2rest.prox.lab/
+metube/mcp`) and permanently failed with `UNABLE_TO_VERIFY_LEAF_SIGNATURE`
+-- Node.js inside the OpenClaw pod doesn't trust the ingress's cert CA.
+Root cause: `list_apps`/`get_manifest` only ever told callers how to
+build the *external* URL (`mcpEndpointPath` + prose "combine with the
+cluster's DNS zone"), even though every agent harness mcp2rest serves
+runs inside the same cluster and should never need to leave it (or trust
+an external cert) to reach mcp2rest. This is not app-specific -- it would
+recur for any app onboarded the same way, and is exactly the kind of
+thing `homelab`#226 ("auto-wire agent harnesses' MCP connectors at
+install time") needs to get right by construction, not by convention.
+
+| Status | Task |
+|---|---|
+| done | `internal/manifest.App`: add `MCPInternalURL` (e.g. `"http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp"`), documented the same way as `MCPEndpointPath` -- read-only/derived, never required or read back from a `register_app` payload |
+| done | `internal/adminapi.API`: add `SetInternalBaseURL`/`internalMCPURL` (setter rather than a `New(...)` parameter, so every existing call site is unaffected); populate `MCPInternalURL` on both `list_apps` and `get_manifest` |
+| done | `cmd/mcp2rest/main.go`: add `internalBaseURL(serviceName, namespace, addr)` helper and a new `MCP2REST_SERVICE_NAME` env var (default `"mcp2rest"`, mirrors the existing `MCP2REST_NAMESPACE` convention); wire `admin.SetInternalBaseURL(...)` at startup |
+| done | Sharpen `list_apps`/`get_manifest` tool descriptions to tell any caller (human operator or future `hlctl` automation) to PREFER `mcpInternalUrl`, citing the exact `UNABLE_TO_VERIFY_LEAF_SIGNATURE` failure mode as the reason |
+| done | Regression tests: `internalBaseURL` port-parsing edge cases (`cmd/mcp2rest/main_test.go`); `MCPInternalURL` populated correctly via both `API.GetManifest` and a real `list_apps`/`get_manifest` tool-call round trip, and left empty when unset (`internal/adminapi/adminapi_test.go`) |
+| done | Verified live against the production cluster: re-pointed OpenClaw's `MeTube MCP Tool` connector at the internal URL via `openclaw mcp set` -- `openclaw mcp probe` went from 0 tools to 5, `openclaw mcp doctor` reports `ok` |
+| note | `homelab`#226 is the long-term fix (hlctl should read/render `mcpInternalUrl` automatically for every agent instance it wires up); this phase only fixes mcp2rest's own side of the contract so that work (and any human operator working today) has a correct field to read from |
+

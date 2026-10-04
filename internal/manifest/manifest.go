@@ -159,10 +159,25 @@ type App struct {
 	// in, a register_app manifest payload, and is never persisted to
 	// the app's discovery ConfigMap. Combine with the cluster's DNS
 	// zone (see each response's accompanying note) to build the full
-	// external URL a NEW MCP client/server entry should be pointed at;
-	// this app's tools are never reachable by calling them on the
-	// management session that returned this manifest.
+	// external URL; this is only useful for a caller genuinely outside
+	// the cluster -- in-cluster callers should prefer MCPInternalURL
+	// instead (it avoids an unnecessary ingress hop and, critically,
+	// the external hostname's TLS certificate, which an in-cluster
+	// client's trust store may not recognize). This app's tools are
+	// never reachable by calling them on the management session that
+	// returned this manifest.
 	MCPEndpointPath string `json:"mcpEndpointPath,omitempty"`
+	// MCPInternalURL is this app's full, ready-to-use mcp2rest-proxied
+	// MCP endpoint URL reachable from inside the same cluster, e.g.
+	// "http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp". It
+	// is a read-only, derived field populated the same way as
+	// MCPEndpointPath (list_apps/get_manifest only; never read from or
+	// persisted in a register_app payload). Every agent harness this
+	// mcp2rest instance serves runs inside the same cluster, so any
+	// caller wiring up a new MCP server entry -- a human operator or
+	// future automation alike -- should prefer this field over
+	// constructing the external DNS-zone URL from MCPEndpointPath.
+	MCPInternalURL string `json:"mcpInternalUrl,omitempty"`
 }
 
 // Validate reports a descriptive error if a is not well-formed.

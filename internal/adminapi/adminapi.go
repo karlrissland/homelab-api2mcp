@@ -30,11 +30,12 @@ type CredentialReloader interface {
 
 // API serves the reserved management tool set.
 type API struct {
-	client kubernetes.Interface
-	table  *discovery.Table
-	store  *keys.Store
-	writer *keys.SecretWriter
-	creds  CredentialReloader
+	client          kubernetes.Interface
+	table           *discovery.Table
+	store           *keys.Store
+	writer          *keys.SecretWriter
+	creds           CredentialReloader
+	internalBaseURL string
 }
 
 // AuthorizedAgent identifies one agent instance that should hold a key.
@@ -205,6 +206,16 @@ func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store,
 	}
 }
 
+// SetInternalBaseURL records this mcp2rest instance's own in-cluster base
+// URL (e.g. "http://mcp2rest.mcp2rest.svc.cluster.local:8080"), used to
+// populate manifest.App.MCPInternalURL on list_apps/get_manifest
+// responses. A setter rather than a New(...) constructor parameter so
+// this doesn't ripple through every existing adminapi.New call site; it
+// is optional -- leaving it unset (as in tests) simply omits the field.
+func (a *API) SetInternalBaseURL(baseURL string) {
+	a.internalBaseURL = strings.TrimSuffix(baseURL, "/")
+}
+
 // EnsureBootstrapAdminKey mints the one bootstrap admin key once per process
 // lifetime and writes it only to the provided output stream for this v1 phase.
 func (a *API) EnsureBootstrapAdminKey(w io.Writer) (string, bool, error) {
@@ -281,11 +292,17 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 		Description: "List every app registered with mcp2rest, from the live discovery table. Admin tier " +
 			"required. Returns app names and their declared tools/schemas only -- it does NOT return a " +
 			"connection URL or any API key, and calling a listed tool name directly on THIS session will " +
-			"fail (these tools do not exist here). Each returned app includes mcpEndpointPath (e.g. " +
-			"\"/metube/mcp\"); the full external URL is https://mcp2rest.<dns-zone>{mcpEndpointPath}. A " +
-			"human operator must add that as a NEW, separate MCP server entry in your client/harness, " +
-			"authenticated with that agent instance's own key -- there is no tool call, here or anywhere, " +
-			"that adds it for you.",
+			"fail (these tools do not exist here). Each returned app includes mcpInternalUrl -- a " +
+			"ready-to-use, in-cluster URL (e.g. \"http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp\") " +
+			"-- PREFER this for any agent harness, since every harness mcp2rest serves runs inside the " +
+			"same cluster; it avoids an unnecessary ingress hop and the external hostname's TLS " +
+			"certificate, which an in-cluster client's trust store typically does not recognize (this " +
+			"exact failure mode -- UNABLE_TO_VERIFY_LEAF_SIGNATURE -- is why this field exists). Also " +
+			"includes mcpEndpointPath (e.g. \"/metube/mcp\"); the full external URL is " +
+			"https://mcp2rest.<dns-zone>{mcpEndpointPath}, reserved for callers genuinely outside the " +
+			"cluster. A human operator must add the chosen URL as a NEW, separate MCP server entry in " +
+			"your client/harness, authenticated with that agent instance's own key -- there is no tool " +
+			"call, here or anywhere, that adds it for you.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListAppsResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ListAppsResult{}, err
@@ -297,6 +314,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 			// table's own stored object, shared across requests.
 			copied := *app
 			copied.MCPEndpointPath = mcpEndpointPath(copied.Name)
+			copied.MCPInternalURL = a.internalMCPURL(copied.Name)
 			result[i] = &copied
 		}
 		return nil, ListAppsResult{Apps: result}, nil
@@ -307,13 +325,19 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 		Description: "Fetch one app's full internal manifest (tool names, descriptions, input schemas, " +
 			"tiers) by app name. Admin tier required. This is read-only documentation of what that app's " +
 			"own MCP endpoint will expose -- it does NOT register, connect, or add the tool to any agent " +
-			"or harness, and does NOT return a connection URL or API key. Calling one of the returned " +
-			"tool names (e.g. queue_download) directly on THIS session will fail -- those tools do not " +
-			"exist here. The result includes mcpEndpointPath (e.g. \"/metube/mcp\"); the full external URL " +
-			"is https://mcp2rest.<dns-zone>{mcpEndpointPath}. A human operator must add that as a NEW, " +
-			"separate MCP client/server entry, authenticated with that agent instance's own key from its " +
-			"<agent-instance>-mcp2rest-keys Secret -- there is no tool call, here or anywhere, that adds " +
-			"or connects it for you.",
+			"or harness, and does NOT return an API key. Calling one of the returned tool names (e.g. " +
+			"queue_download) directly on THIS session will fail -- those tools do not exist here. The " +
+			"result includes mcpInternalUrl -- a ready-to-use, in-cluster URL (e.g. " +
+			"\"http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp\") -- PREFER this for any agent " +
+			"harness, since every harness mcp2rest serves runs inside the same cluster; it avoids an " +
+			"unnecessary ingress hop and the external hostname's TLS certificate, which an in-cluster " +
+			"client's trust store typically does not recognize (this exact failure mode -- " +
+			"UNABLE_TO_VERIFY_LEAF_SIGNATURE -- is why this field exists). Also includes mcpEndpointPath " +
+			"(e.g. \"/metube/mcp\"); the full external URL is https://mcp2rest.<dns-zone>{mcpEndpointPath}, " +
+			"reserved for callers genuinely outside the cluster. A human operator must add the chosen URL " +
+			"as a NEW, separate MCP client/server entry, authenticated with that agent instance's own key " +
+			"from its <agent-instance>-mcp2rest-keys Secret -- there is no tool call, here or anywhere, " +
+			"that adds or connects it for you.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetManifestParams) (*mcp.CallToolResult, manifest.App, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, manifest.App{}, err
@@ -483,6 +507,17 @@ func mcpEndpointPath(appName string) string {
 	return "/" + appName + "/mcp"
 }
 
+// internalMCPURL returns an app's full, ready-to-use in-cluster MCP
+// endpoint URL (e.g. "http://mcp2rest.mcp2rest.svc.cluster.local:8080/
+// metube/mcp"), or "" if this instance's internal base URL hasn't been
+// configured (SetInternalBaseURL was never called, e.g. in unit tests).
+func (a *API) internalMCPURL(appName string) string {
+	if a.internalBaseURL == "" {
+		return ""
+	}
+	return a.internalBaseURL + mcpEndpointPath(appName)
+}
+
 // GetManifest returns the live manifest from discovery.
 func (a *API) GetManifest(_ context.Context, params GetManifestParams) (manifest.App, error) {
 	if strings.TrimSpace(params.AppName) == "" {
@@ -494,6 +529,7 @@ func (a *API) GetManifest(_ context.Context, params GetManifestParams) (manifest
 	}
 	result := *app
 	result.MCPEndpointPath = mcpEndpointPath(result.Name)
+	result.MCPInternalURL = a.internalMCPURL(result.Name)
 	return result, nil
 }
 
