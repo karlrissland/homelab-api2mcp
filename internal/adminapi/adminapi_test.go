@@ -253,6 +253,13 @@ func TestListAppsAndGetManifestReflectDiscovery(t *testing.T) {
 	if app.Name != "demo" || app.Namespace != "apps" {
 		t.Fatalf("GetManifest() = %+v, want demo in apps namespace", app)
 	}
+	// Regression test: an agent calling get_manifest has no other way to
+	// derive this app's own mcp2rest-proxied endpoint path, since the
+	// DNS zone + routing convention live only in prose session
+	// instructions that are easy for an LLM client to lose track of.
+	if want := "/demo/mcp"; app.MCPEndpointPath != want {
+		t.Fatalf("GetManifest().MCPEndpointPath = %q, want %q", app.MCPEndpointPath, want)
+	}
 }
 
 func TestCreateRevokeRotateKeyUpdatesSecret(t *testing.T) {
@@ -652,6 +659,9 @@ func TestRegisterToolRoundTrip(t *testing.T) {
 	listApps := decodeStructured[ListAppsResult](t, listResult.StructuredContent)
 	if len(listApps.Apps) != 1 || listApps.Apps[0].Name != "demo" {
 		t.Fatalf("list_apps structured result = %+v, want one demo app", listApps)
+	}
+	if want := "/demo/mcp"; listApps.Apps[0].MCPEndpointPath != want {
+		t.Fatalf("list_apps MCPEndpointPath = %q, want %q", listApps.Apps[0].MCPEndpointPath, want)
 	}
 
 	manifestResult, err := session.CallTool(context.Background(), &mcp.CallToolParams{

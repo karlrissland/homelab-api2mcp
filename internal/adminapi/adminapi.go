@@ -280,13 +280,26 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 		Name: "list_apps",
 		Description: "List every app registered with mcp2rest, from the live discovery table. Admin tier " +
 			"required. Returns app names and their declared tools/schemas only -- it does NOT return a " +
-			"connection URL or any API key. Each app's own MCP endpoint is always " +
-			"https://mcp2rest.<dns-zone>/{app-name}/mcp.",
+			"connection URL or any API key, and calling a listed tool name directly on THIS session will " +
+			"fail (these tools do not exist here). Each returned app includes mcpEndpointPath (e.g. " +
+			"\"/metube/mcp\"); the full external URL is https://mcp2rest.<dns-zone>{mcpEndpointPath}. A " +
+			"human operator must add that as a NEW, separate MCP server entry in your client/harness, " +
+			"authenticated with that agent instance's own key -- there is no tool call, here or anywhere, " +
+			"that adds it for you.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListAppsResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ListAppsResult{}, err
 		}
-		return nil, ListAppsResult{Apps: a.table.List()}, nil
+		apps := a.table.List()
+		result := make([]*manifest.App, len(apps))
+		for i, app := range apps {
+			// Copy before mutating -- app points at the discovery
+			// table's own stored object, shared across requests.
+			copied := *app
+			copied.MCPEndpointPath = mcpEndpointPath(copied.Name)
+			result[i] = &copied
+		}
+		return nil, ListAppsResult{Apps: result}, nil
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -294,9 +307,13 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 		Description: "Fetch one app's full internal manifest (tool names, descriptions, input schemas, " +
 			"tiers) by app name. Admin tier required. This is read-only documentation of what that app's " +
 			"own MCP endpoint will expose -- it does NOT register, connect, or add the tool to any agent " +
-			"or harness, and does NOT return a connection URL or API key. To actually call this app's " +
-			"tools, connect a new MCP client/server entry to https://mcp2rest.<dns-zone>/{app-name}/mcp, " +
-			"authenticated with that agent instance's own key from its <agent-instance>-mcp2rest-keys Secret.",
+			"or harness, and does NOT return a connection URL or API key. Calling one of the returned " +
+			"tool names (e.g. queue_download) directly on THIS session will fail -- those tools do not " +
+			"exist here. The result includes mcpEndpointPath (e.g. \"/metube/mcp\"); the full external URL " +
+			"is https://mcp2rest.<dns-zone>{mcpEndpointPath}. A human operator must add that as a NEW, " +
+			"separate MCP client/server entry, authenticated with that agent instance's own key from its " +
+			"<agent-instance>-mcp2rest-keys Secret -- there is no tool call, here or anywhere, that adds " +
+			"or connects it for you.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetManifestParams) (*mcp.CallToolResult, manifest.App, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, manifest.App{}, err
@@ -458,6 +475,14 @@ func (a *API) DeregisterApp(ctx context.Context, params DeregisterAppParams) (De
 	}, nil
 }
 
+// mcpEndpointPath returns an app's own mcp2rest-proxied MCP endpoint
+// path, e.g. "/metube/mcp" -- always "/" + app name + "/mcp", mirroring
+// runtime.go's routing convention. Deliberately generic/app-name-driven,
+// never hard-coded to any single app.
+func mcpEndpointPath(appName string) string {
+	return "/" + appName + "/mcp"
+}
+
 // GetManifest returns the live manifest from discovery.
 func (a *API) GetManifest(_ context.Context, params GetManifestParams) (manifest.App, error) {
 	if strings.TrimSpace(params.AppName) == "" {
@@ -467,7 +492,9 @@ func (a *API) GetManifest(_ context.Context, params GetManifestParams) (manifest
 	if !ok {
 		return manifest.App{}, fmt.Errorf("get manifest: app %q not found", params.AppName)
 	}
-	return *app, nil
+	result := *app
+	result.MCPEndpointPath = mcpEndpointPath(result.Name)
+	return result, nil
 }
 
 // ReloadCache rebuilds the in-memory upstream credential cache from the

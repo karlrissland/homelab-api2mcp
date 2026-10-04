@@ -152,6 +152,17 @@ type App struct {
 	// UpstreamMCPURL is the upstream MCP server URL to relay to
 	// (passthrough tools only).
 	UpstreamMCPURL string `json:"upstreamMCPURL,omitempty"`
+	// MCPEndpointPath is this app's own mcp2rest-proxied MCP endpoint
+	// path, e.g. "/metube/mcp" (always "/" + Name + "/mcp"). It is a
+	// read-only, derived field: mcp2rest populates it only on list_apps
+	// and get_manifest responses -- it is never read from, or required
+	// in, a register_app manifest payload, and is never persisted to
+	// the app's discovery ConfigMap. Combine with the cluster's DNS
+	// zone (see each response's accompanying note) to build the full
+	// external URL a NEW MCP client/server entry should be pointed at;
+	// this app's tools are never reachable by calling them on the
+	// management session that returned this manifest.
+	MCPEndpointPath string `json:"mcpEndpointPath,omitempty"`
 }
 
 // Validate reports a descriptive error if a is not well-formed.

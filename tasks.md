@@ -283,3 +283,23 @@ with "admin key is required" even with auth disabled cluster-wide.
 | done | `internal/skillstools.requireAuthenticated`: same reordering (its `requireAdmin` calls through to it) |
 | done | Regression tests: `TestRequireAdminAllowsEmptyKeyWhenAuthDisabled`/`TestRequireAdminRejectsEmptyKeyWhenAuthEnabled` in both `adminapi` and `skillstools` packages |
 | done | Verified live: `kubectl set env deployment/mcp2rest -n mcp2rest MCP2REST_DISABLE_AUTH=true`, confirmed a no-key `tools/call list_apps` failed before this fix and (after rebuild/redeploy) should succeed |
+
+## Phase 22 — Surface a literal `mcpEndpointPath` in list_apps/get_manifest
+
+OpenClaw onboarded an app via `get_manifest`, then tried to call that
+app's tools (e.g. `queue_download`) directly on the SAME management
+session, and failed with "tool not found". Root cause: the only place
+mcp2rest explained "these tools live on a different session, at
+`/{app-name}/mcp`" was prose in the session-level `initialize`
+`instructions` string (Phase 20) -- a field set once at connection time
+that's easy for an LLM-driven client to lose track of by the time it's
+reasoning about a `get_manifest` result several turns later. The actual
+tool-call *result* payload (`manifest.App`) had no field at all carrying
+this information, so the agent had no in-band way to rediscover it.
+
+| Status | Task |
+|---|---|
+| done | `internal/manifest.App`: add `MCPEndpointPath` (e.g. `"/metube/mcp"`), documented as read-only/derived -- never required or read back from a `register_app` input payload, never persisted to the app's discovery ConfigMap |
+| done | `internal/adminapi`: add `mcpEndpointPath(appName)` helper (`"/" + appName + "/mcp"`, mirrors `runtime.go`'s routing convention); populate it on copies returned by `list_apps` and `get_manifest` (never mutate the discovery table's own stored `*manifest.App` pointers) |
+| done | Sharpen `list_apps`/`get_manifest` tool descriptions to point at the new field, spell out the full external URL template, and explicitly warn that calling a listed tool name on the current session will fail |
+| done | Regression tests: assert `MCPEndpointPath` is populated correctly via both `API.GetManifest` and a real `list_apps`/`get_manifest` tool-call round trip |
