@@ -164,6 +164,9 @@ Workflow for onboarding a new app's tools into an agent harness:
 // cased to any one app -- since every registered app shares this same
 // runtime path.
 func appInstructions(appName string) string {
+	slug := skillstools.ToolNameSlug(appName)
+	listSkillsTool := fmt.Sprintf("list_%s_skills", slug)
+	getSkillTool := fmt.Sprintf("get_%s_skill", slug)
 	return fmt.Sprintf(`You are connected to mcp2rest's proxy for the %q app (not mcp2rest itself).
 
 mcp2rest is a shared REST-to-MCP proxy: every tool listed in this session's
@@ -172,15 +175,20 @@ app's Liquid request/response templates -- not a tool belonging to mcp2rest
 generically. Tool names, parameters, and behavior are specific to %q; they
 do not apply to any other app registered with mcp2rest.
 
-This session also exposes read-only Skill documentation tools
-(list_skills, get_skill) shared across the whole cluster, independent of
-%q -- useful for background/API documentation, not for calling %q itself.
+This session also exposes read-only Skill documentation tools named %s and
+%s (note: named after %q, not the generic list_skills/get_skill used on
+mcp2rest's management endpoint -- do not confuse the two) scoped to %q's
+own Skills (plus any cluster-wide Skills not owned by a specific app) --
+useful for background/API documentation about %q itself, not for calling
+%q's actual tools. Skills belonging to other apps are not visible on this
+session; use mcp2rest's management endpoint for cluster-wide Skill
+visibility and the generic list_skills/get_skill tool names.
 
 Only tools your API key's tier (user or admin) is authorized for are
 listed here; calling an unlisted/unauthorized tool name will be rejected.
 Each app has its own tool set and its own endpoint path
 (https://mcp2rest.<dns-zone>/{app-name}/mcp) -- tools from other apps are
-never available on this session.`, appName, appName, appName, appName, appName)
+never available on this session.`, appName, appName, appName, listSkillsTool, getSkillTool, appName, appName, appName, appName)
 }
 
 func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
@@ -192,7 +200,7 @@ func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 	apiKey := bearerToken(req)
 	if rt.management {
 		server := mcp.NewServer(Info, &mcp.ServerOptions{Instructions: managementInstructions})
-		h.skills.RegisterReadTools(server, apiKey)
+		h.skills.RegisterReadTools(server, apiKey, "")
 		h.skills.RegisterWriteTools(server, apiKey)
 		h.admin.RegisterTools(server, apiKey)
 		return server
@@ -203,7 +211,7 @@ func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {
 		return mcp.NewServer(Info, nil)
 	}
 	server := mcp.NewServer(Info, &mcp.ServerOptions{Instructions: appInstructions(app.Name)})
-	h.skills.RegisterReadTools(server, apiKey)
+	h.skills.RegisterReadTools(server, apiKey, app.Name)
 	server.AddReceivingMiddleware(appToolListFilter(*app, apiKey, h.lookupKey))
 	h.registerAppTools(server, *app, apiKey)
 	return server

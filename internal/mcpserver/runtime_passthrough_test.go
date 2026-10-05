@@ -218,7 +218,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if got, want := strings.Join(names, ","), "get_skill,list_skills,public_echo"; got != want {
+	if got, want := strings.Join(names, ","), "get_relay_demo_skill,list_relay_demo_skills,public_echo"; got != want {
 		t.Fatalf("ListTools() names = %q, want %q", got, want)
 	}
 

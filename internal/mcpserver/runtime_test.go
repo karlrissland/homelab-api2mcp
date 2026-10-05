@@ -189,7 +189,7 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		names = append(names, tool.Name)
 	}
 	slices.Sort(names)
-	if got, want := strings.Join(names, ","), "get_skill,list_repos,list_skills"; got != want {
+	if got, want := strings.Join(names, ","), "get_demo_skill,list_demo_skills,list_repos"; got != want {
 		t.Fatalf("ListTools() names = %q, want %q", got, want)
 	}
 
@@ -207,27 +207,27 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		t.Fatalf("CallTool(list_repos) text = %q, want %q", got, "octocat/hello-world")
 	}
 
-	listSkills, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_skills"})
+	listSkills, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_demo_skills"})
 	if err != nil {
-		t.Fatalf("CallTool(list_skills) error = %v", err)
+		t.Fatalf("CallTool(list_demo_skills) error = %v", err)
 	}
 	if listSkills.IsError {
-		t.Fatalf("list_skills tool error: %s", joinedText(listSkills))
+		t.Fatalf("list_demo_skills tool error: %s", joinedText(listSkills))
 	}
 	decodedSkills := decodeStructured[skillstools.ListSkillsResult](t, listSkills.StructuredContent)
 	if len(decodedSkills.Skills) != 1 || decodedSkills.Skills[0].Name != "mcp2rest-usage" {
-		t.Fatalf("list_skills structured result = %+v, want mcp2rest-usage summary", decodedSkills)
+		t.Fatalf("list_demo_skills structured result = %+v, want mcp2rest-usage summary", decodedSkills)
 	}
 
 	getSkill, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "get_skill",
+		Name:      "get_demo_skill",
 		Arguments: map[string]any{"name": "mcp2rest-usage"},
 	})
 	if err != nil {
-		t.Fatalf("CallTool(get_skill) error = %v", err)
+		t.Fatalf("CallTool(get_demo_skill) error = %v", err)
 	}
 	if getSkill.IsError {
-		t.Fatalf("get_skill tool error: %s", joinedText(getSkill))
+		t.Fatalf("get_demo_skill tool error: %s", joinedText(getSkill))
 	}
 	decodedSkill := decodeStructured[skillstools.GetSkillResult](t, getSkill.StructuredContent)
 	if decodedSkill.Skill.Spec.Content != "# mcp2rest" {

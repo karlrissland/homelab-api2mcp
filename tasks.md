@@ -355,3 +355,33 @@ install time") needs to get right by construction, not by convention.
 | done | Verified live against the production cluster: re-pointed OpenClaw's `MeTube MCP Tool` connector at the internal URL via `openclaw mcp set` -- `openclaw mcp probe` went from 0 tools to 5, `openclaw mcp doctor` reports `ok` |
 | note | `homelab`#226 is the long-term fix (hlctl should read/render `mcpInternalUrl` automatically for every agent instance it wires up); this phase only fixes mcp2rest's own side of the contract so that work (and any human operator working today) has a correct field to read from |
 
+## Phase 25 — Scope `list_skills`/`get_skill` per app, with per-app tool names
+
+Live usage found OpenClaw, asked via MeTube's own MCP session "what skills
+do you have", returned the *entire cluster's* Skill catalog (Authentik,
+cert-manager, Traefik, NFS, K3s, ...) instead of MeTube's own Skills. Root
+cause: `RegisterReadTools` always listed/fetched Skills cluster-wide,
+unconditionally -- this was Open Decision 8/plan §3.4, deliberately
+accepted at the time ("revisit only if real usage surfaces a problem") and
+now reversed because real usage did surface a problem. No `homelab` change
+was needed: hlctl already labels every Skill CR with
+`skills.homelab.dev/app=<appName>` (see `internal/skillscrd` in `homelab`),
+so this was entirely mcp2rest-side filtering.
+
+Also renamed the per-app tools from the generic `list_skills`/`get_skill`
+to `list_<app>_skills`/`get_<app>_skill` (e.g. `list_metube_skills`,
+`get_metube_skill`) so a weak model juggling several apps' MCP sessions in
+one harness can't confuse one app's Skill tool for another's, or for
+mcp2rest's own cluster-wide `list_skills`/`get_skill` on the management
+endpoint (which keeps the generic names and stays unfiltered -- an
+admin-tier caller legitimately needs to browse/manage every app's Skills).
+
+| Status | Task |
+|---|---|
+| done | `internal/skillstools.ListSkills`/`GetSkill`: add an `appScope string` parameter; Skills carrying `skills.homelab.dev/app=<other-app>` are excluded, Skills with no app label at all (global/cluster-wide Skills, e.g. mcp2rest's own usage Skill) remain visible from every app's session, `appScope=""` (mcp2rest's management session) stays fully unfiltered |
+| done | `internal/skillstools.RegisterReadTools`: thread `appScope` through; when non-empty, rename the registered tools to `list_<slug>_skills`/`get_<slug>_skill` (new exported `ToolNameSlug` helper: lowercase, non-`[a-z0-9_]` -> `_`) and rewrite their descriptions to say so explicitly; empty `appScope` keeps `list_skills`/`get_skill` |
+| done | `internal/mcpserver.serverForRequest`: management path calls `RegisterReadTools(server, apiKey, "")` (unchanged behavior); per-app path calls `RegisterReadTools(server, apiKey, app.Name)` |
+| done | `internal/mcpserver.appInstructions`: documents the actual per-app tool names (`list_<app>_skills`/`get_<app>_skill`) and explicitly warns not to confuse them with the management endpoint's generic names |
+| done | Tests: `internal/skillstools` -- new `TestListSkillsAppScopeFiltersToOwnAppPlusGlobal`, `TestGetSkillAppScopeRejectsOtherApp` (cross-app fetch reported as not-found, not leaked), `TestRegisterReadToolsNamesAreAppScoped` (asserts exact tool names for both a per-app and the management registration); updated existing per-app `ListTools()` assertions in `internal/mcpserver/runtime_test.go` and `runtime_passthrough_test.go` to the new `list_<app>_skills`/`get_<app>_skill` names |
+| done | `go build ./...`, `go vet ./...`, `gofmt -l .`, `golangci-lint run ./...`, `go test ./...` all clean |
+

@@ -27,6 +27,11 @@ const (
 	Kind = "Skill"
 	// Resource is the Skill CRD plural resource name shared with homelab's skillscrd package.
 	Resource = "skills"
+	// labelApp mirrors homelab's skillscrd.labelApp -- the label hlctl
+	// already applies to every app-scoped Skill CR (skills.homelab.dev/app=<appName>).
+	// Used to scope list_skills/get_skill to one app's own Skills on a
+	// per-app proxied session.
+	labelApp = "skills.homelab.dev/app"
 )
 
 var skillGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: Resource}
@@ -136,23 +141,65 @@ func New(client dynamic.Interface, lookup pipeline.KeyLookup) (*API, error) {
 	}
 }
 
-// RegisterReadTools adds list_skills/get_skill to server. Both tools require
-// any valid authenticated key, but deliberately allow cluster-wide reads.
-func (a *API) RegisterReadTools(server *mcp.Server, apiKey string) {
+// ToolNameSlug lowercases s and replaces every character outside [a-z0-9_]
+// with "_", so an app name is always safe to splice into an MCP tool name.
+// Exported so callers constructing descriptive text (e.g. session
+// Instructions) can refer to the exact tool names RegisterReadTools derives
+// from an app name.
+func ToolNameSlug(s string) string {
+	lower := strings.ToLower(s)
+	var b strings.Builder
+	b.Grow(len(lower))
+	for _, r := range lower {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('_')
+		}
+	}
+	return b.String()
+}
+
+// RegisterReadTools adds Skill read tools to server. Both tools require any
+// valid authenticated key. appScope, when non-empty, scopes both tools to
+// Skills labeled skills.homelab.dev/app=<appScope> -- used on a per-app
+// proxied session (the app's own name) so that app's tool set only ever
+// surfaces its own Skills, and also renames the tools to
+// list_<app>_skills/get_<app>_skill (instead of the generic
+// list_skills/get_skill) so an agent juggling multiple apps' sessions in one
+// harness can't confuse one app's Skills tool for another's or for
+// mcp2rest's cluster-wide management tool of the same generic name. Pass an
+// empty appScope for mcp2rest's management session, which keeps the generic
+// list_skills/get_skill names and deliberately stays cluster-wide (any
+// admin-tier caller legitimately needs to browse/manage every app's Skills,
+// not just one).
+func (a *API) RegisterReadTools(server *mcp.Server, apiKey string, appScope string) {
+	listName := "list_skills"
+	getName := "get_skill"
+	listDescription := "List every Skill custom resource cluster-wide as compact summaries (name, namespace, skillName, domain, description)."
+	getDescription := "Fetch one Skill custom resource by metadata.name, returning the full Skill content."
+	if appScope != "" {
+		slug := ToolNameSlug(appScope)
+		listName = fmt.Sprintf("list_%s_skills", slug)
+		getName = fmt.Sprintf("get_%s_skill", slug)
+		listDescription = fmt.Sprintf("List this app's (%q) own Skill custom resources as compact summaries (name, namespace, skillName, domain, description). Skills belonging to other apps are not visible here.", appScope)
+		getDescription = fmt.Sprintf("Fetch one of this app's (%q) own Skill custom resources by metadata.name, returning the full Skill content. Skills belonging to other apps are not visible here.", appScope)
+	}
+
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "list_skills",
-		Description: "List every Skill custom resource cluster-wide as compact summaries (name, namespace, skillName, domain, description).",
+		Name:        listName,
+		Description: listDescription,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ ListSkillsParams) (*mcp.CallToolResult, ListSkillsResult, error) {
 		if _, err := a.requireAuthenticated(apiKey); err != nil {
 			return nil, ListSkillsResult{}, err
 		}
-		result, err := a.ListSkills(ctx)
+		result, err := a.ListSkills(ctx, appScope)
 		return nil, result, err
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        "get_skill",
-		Description: "Fetch one Skill custom resource by metadata.name, returning the full Skill content.",
+		Name:        getName,
+		Description: getDescription,
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -165,7 +212,7 @@ func (a *API) RegisterReadTools(server *mcp.Server, apiKey string) {
 		if _, err := a.requireAuthenticated(apiKey); err != nil {
 			return nil, GetSkillResult{}, err
 		}
-		result, err := a.GetSkill(ctx, params)
+		result, err := a.GetSkill(ctx, params, appScope)
 		return nil, result, err
 	})
 }
@@ -231,9 +278,16 @@ func (a *API) RegisterWriteTools(server *mcp.Server, apiKey string) {
 	})
 }
 
-// ListSkills returns the cluster-wide Skill list as compact summaries so the
-// MCP response stays small even when the CRD content itself is large.
-func (a *API) ListSkills(ctx context.Context) (ListSkillsResult, error) {
+// ListSkills returns the Skill list as compact summaries so the MCP
+// response stays small even when the CRD content itself is large. appScope,
+// when non-empty, restricts the result to Skills either unlabeled for any
+// app (cluster-wide/global Skills, e.g. mcp2rest's own usage Skill, remain
+// visible from every app's session) or labeled
+// skills.homelab.dev/app=<appScope> -- used on a per-app proxied session so
+// an app's own tool set only surfaces that app's own Skills plus global
+// ones, never another app's. An empty appScope lists cluster-wide
+// unfiltered, as used on mcp2rest's management session.
+func (a *API) ListSkills(ctx context.Context, appScope string) (ListSkillsResult, error) {
 	list, err := a.client.Resource(skillGVR).Namespace(metav1.NamespaceAll).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return ListSkillsResult{}, fmt.Errorf("list skills: %w", err)
@@ -241,6 +295,9 @@ func (a *API) ListSkills(ctx context.Context) (ListSkillsResult, error) {
 
 	skills := make([]SkillSummary, 0, len(list.Items))
 	for _, item := range list.Items {
+		if !skillVisibleInScope(&item, appScope) {
+			continue
+		}
 		skill, err := skillFromUnstructured(&item)
 		if err != nil {
 			return ListSkillsResult{}, fmt.Errorf("list skills: decode %s/%s: %w", item.GetNamespace(), item.GetName(), err)
@@ -271,8 +328,24 @@ func (a *API) ListSkills(ctx context.Context) (ListSkillsResult, error) {
 	return ListSkillsResult{Skills: skills}, nil
 }
 
-// GetSkill fetches one Skill by resource name, optionally disambiguated by namespace.
-func (a *API) GetSkill(ctx context.Context, params GetSkillParams) (GetSkillResult, error) {
+// skillVisibleInScope reports whether item should be visible to a caller
+// scoped to appScope. An empty appScope (cluster-wide/management callers)
+// always sees everything. A non-empty appScope sees Skills with no
+// skills.homelab.dev/app label at all (global Skills, not owned by any one
+// app) plus Skills whose app label exactly matches appScope.
+func skillVisibleInScope(item *unstructured.Unstructured, appScope string) bool {
+	if appScope == "" {
+		return true
+	}
+	appLabel, has := item.GetLabels()[labelApp]
+	return !has || appLabel == appScope
+}
+
+// GetSkill fetches one Skill by resource name, optionally disambiguated by
+// namespace. appScope, when non-empty, restricts matches the same way
+// ListSkills does (see skillVisibleInScope) -- a Skill belonging to a
+// different app is reported as not found rather than leaking its existence.
+func (a *API) GetSkill(ctx context.Context, params GetSkillParams, appScope string) (GetSkillResult, error) {
 	name := strings.TrimSpace(params.Name)
 	if name == "" {
 		return GetSkillResult{}, fmt.Errorf("get skill: name is required")
@@ -283,6 +356,9 @@ func (a *API) GetSkill(ctx context.Context, params GetSkillParams) (GetSkillResu
 		item, err := a.client.Resource(skillGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			return GetSkillResult{}, fmt.Errorf("get skill %q in namespace %q: %w", name, namespace, err)
+		}
+		if !skillVisibleInScope(item, appScope) {
+			return GetSkillResult{}, fmt.Errorf("get skill: skill %q not found", name)
 		}
 		skill, err := skillFromUnstructured(item)
 		if err != nil {
@@ -298,7 +374,7 @@ func (a *API) GetSkill(ctx context.Context, params GetSkillParams) (GetSkillResu
 
 	matches := make([]unstructured.Unstructured, 0, 1)
 	for _, item := range list.Items {
-		if item.GetName() == name {
+		if item.GetName() == name && skillVisibleInScope(&item, appScope) {
 			matches = append(matches, item)
 		}
 	}

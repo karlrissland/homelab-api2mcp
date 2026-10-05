@@ -3,6 +3,7 @@ package skillstools
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -43,7 +44,7 @@ func TestListSkillsReturnsOutOfBandSkills(t *testing.T) {
 		}, nil),
 	)
 
-	result, err := api.ListSkills(context.Background())
+	result, err := api.ListSkills(context.Background(), "")
 	if err != nil {
 		t.Fatalf("ListSkills() error = %v", err)
 	}
@@ -75,7 +76,7 @@ func TestGetSkillReturnsOneAndNotFound(t *testing.T) {
 		Content:     "# Alpha",
 	}, nil))
 
-	got, err := api.GetSkill(context.Background(), GetSkillParams{Name: "alpha"})
+	got, err := api.GetSkill(context.Background(), GetSkillParams{Name: "alpha"}, "")
 	if err != nil {
 		t.Fatalf("GetSkill(alpha) error = %v", err)
 	}
@@ -86,12 +87,146 @@ func TestGetSkillReturnsOneAndNotFound(t *testing.T) {
 		t.Fatalf("GetSkill(alpha).Spec.Content = %q, want %q", got.Skill.Spec.Content, "# Alpha")
 	}
 
-	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "missing"})
+	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "missing"}, "")
 	if err == nil {
 		t.Fatal("GetSkill(missing) error = nil, want not found error")
 	}
 	if !strings.Contains(err.Error(), `skill "missing" not found`) {
 		t.Fatalf("GetSkill(missing) error = %v, want clear not found error", err)
+	}
+}
+
+func TestListSkillsAppScopeFiltersToOwnAppPlusGlobal(t *testing.T) {
+	t.Parallel()
+
+	api, _ := newTestAPI(t,
+		testSkillObject("apps", "metube-api", SkillSpec{
+			SkillName:   "MeTube API",
+			Description: "MeTube API description",
+			Domain:      "metube",
+			Type:        "parent",
+			Confidence:  "high",
+			Source:      "earned",
+			Content:     "# MeTube API",
+		}, map[string]string{"skills.homelab.dev/app": "metube"}),
+		testSkillObject("apps", "penpot-api", SkillSpec{
+			SkillName:   "Penpot API",
+			Description: "Penpot API description",
+			Domain:      "penpot",
+			Type:        "parent",
+			Confidence:  "high",
+			Source:      "earned",
+			Content:     "# Penpot API",
+		}, map[string]string{"skills.homelab.dev/app": "penpot"}),
+		testSkillObject("default", "mcp2rest-usage", SkillSpec{
+			SkillName:   "mcp2rest usage",
+			Description: "How to use mcp2rest",
+			Domain:      "mcp2rest",
+			Type:        "parent",
+			Confidence:  "high",
+			Source:      "earned",
+			Content:     "# mcp2rest",
+		}, map[string]string{"skills.homelab.dev/topic": "overview"}),
+	)
+
+	result, err := api.ListSkills(context.Background(), "metube")
+	if err != nil {
+		t.Fatalf("ListSkills(metube) error = %v", err)
+	}
+
+	names := make([]string, 0, len(result.Skills))
+	for _, skill := range result.Skills {
+		names = append(names, skill.Name)
+	}
+	if got, want := strings.Join(names, ","), "metube-api,mcp2rest-usage"; got != want {
+		t.Fatalf("ListSkills(metube) names = %q, want %q (own app + global, never another app's)", got, want)
+	}
+}
+
+func TestGetSkillAppScopeRejectsOtherApp(t *testing.T) {
+	t.Parallel()
+
+	api, _ := newTestAPI(t,
+		testSkillObject("apps", "metube-api", SkillSpec{
+			SkillName:   "MeTube API",
+			Description: "MeTube API description",
+			Domain:      "metube",
+			Type:        "parent",
+			Confidence:  "high",
+			Source:      "earned",
+			Content:     "# MeTube API",
+		}, map[string]string{"skills.homelab.dev/app": "metube"}),
+		testSkillObject("apps", "penpot-api", SkillSpec{
+			SkillName:   "Penpot API",
+			Description: "Penpot API description",
+			Domain:      "penpot",
+			Type:        "parent",
+			Confidence:  "high",
+			Source:      "earned",
+			Content:     "# Penpot API",
+		}, map[string]string{"skills.homelab.dev/app": "penpot"}),
+	)
+
+	// Own app's skill: visible, both with and without an explicit namespace.
+	if _, err := api.GetSkill(context.Background(), GetSkillParams{Name: "metube-api"}, "metube"); err != nil {
+		t.Fatalf("GetSkill(metube-api, scope=metube) error = %v, want success", err)
+	}
+	if _, err := api.GetSkill(context.Background(), GetSkillParams{Name: "metube-api", Namespace: "apps"}, "metube"); err != nil {
+		t.Fatalf("GetSkill(metube-api, ns=apps, scope=metube) error = %v, want success", err)
+	}
+
+	// Another app's skill: must be reported not-found, not leaked, from either lookup path.
+	if _, err := api.GetSkill(context.Background(), GetSkillParams{Name: "penpot-api"}, "metube"); err == nil {
+		t.Fatal("GetSkill(penpot-api, scope=metube) error = nil, want not found")
+	} else if !strings.Contains(err.Error(), `skill "penpot-api" not found`) {
+		t.Fatalf("GetSkill(penpot-api, scope=metube) error = %v, want clear not found error", err)
+	}
+	if _, err := api.GetSkill(context.Background(), GetSkillParams{Name: "penpot-api", Namespace: "apps"}, "metube"); err == nil {
+		t.Fatal("GetSkill(penpot-api, ns=apps, scope=metube) error = nil, want not found")
+	} else if !strings.Contains(err.Error(), `skill "penpot-api" not found`) {
+		t.Fatalf("GetSkill(penpot-api, ns=apps, scope=metube) error = %v, want clear not found error", err)
+	}
+}
+
+func TestRegisterReadToolsNamesAreAppScoped(t *testing.T) {
+	t.Parallel()
+
+	api, _ := newTestAPI(t)
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "skills-test", Version: "0.0.0"}, nil)
+	api.RegisterReadTools(server, "", "MeTube")
+	session := connectSession(t, server)
+	defer func() { _ = session.Close() }()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	names := make([]string, 0, len(tools.Tools))
+	for _, tool := range tools.Tools {
+		names = append(names, tool.Name)
+	}
+	sort.Strings(names)
+	if got, want := strings.Join(names, ","), "get_metube_skill,list_metube_skills"; got != want {
+		t.Fatalf("RegisterReadTools(appScope=MeTube) tool names = %q, want %q", got, want)
+	}
+
+	managementServer := mcp.NewServer(&mcp.Implementation{Name: "skills-test", Version: "0.0.0"}, nil)
+	api.RegisterReadTools(managementServer, "", "")
+	managementSession := connectSession(t, managementServer)
+	defer func() { _ = managementSession.Close() }()
+
+	managementTools, err := managementSession.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	managementNames := make([]string, 0, len(managementTools.Tools))
+	for _, tool := range managementTools.Tools {
+		managementNames = append(managementNames, tool.Name)
+	}
+	sort.Strings(managementNames)
+	if got, want := strings.Join(managementNames, ","), "get_skill,list_skills"; got != want {
+		t.Fatalf("RegisterReadTools(appScope=\"\") tool names = %q, want %q", got, want)
 	}
 }
 
@@ -126,7 +261,7 @@ func TestWriteToolsRequireAdminAndMutate(t *testing.T) {
 	if !userCreate.IsError {
 		t.Fatal("CallTool(create_skill,user) IsError = false, want true")
 	}
-	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "alpha"})
+	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "alpha"}, "")
 	if err == nil || !strings.Contains(err.Error(), `skill "alpha" not found`) {
 		t.Fatalf("GetSkill(alpha) after rejected create = %v, want not found", err)
 	}
@@ -166,7 +301,7 @@ func TestWriteToolsRequireAdminAndMutate(t *testing.T) {
 	if !userUpdate.IsError {
 		t.Fatal("CallTool(update_skill,user) IsError = false, want true")
 	}
-	beforeUpdate, err := api.GetSkill(context.Background(), GetSkillParams{Name: "alpha", Namespace: "apps"})
+	beforeUpdate, err := api.GetSkill(context.Background(), GetSkillParams{Name: "alpha", Namespace: "apps"}, "")
 	if err != nil {
 		t.Fatalf("GetSkill(alpha/apps) error = %v", err)
 	}
@@ -197,7 +332,7 @@ func TestWriteToolsRequireAdminAndMutate(t *testing.T) {
 	if !userDelete.IsError {
 		t.Fatal("CallTool(delete_skill,user) IsError = false, want true")
 	}
-	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "alpha", Namespace: "apps"})
+	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "alpha", Namespace: "apps"}, "")
 	if err != nil {
 		t.Fatalf("GetSkill(alpha/apps) after rejected delete error = %v, want skill to remain", err)
 	}
@@ -213,7 +348,7 @@ func TestWriteToolsRequireAdminAndMutate(t *testing.T) {
 		t.Fatalf("CallTool(delete_skill,admin) tool error: %s", textContent(adminDelete))
 	}
 
-	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "alpha", Namespace: "apps"})
+	_, err = api.GetSkill(context.Background(), GetSkillParams{Name: "alpha", Namespace: "apps"}, "")
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("GetSkill(alpha/apps) after delete = %v, want not found", err)
 	}
@@ -418,7 +553,7 @@ func TestGetSkillErrorsOnDuplicateNamesWithoutNamespace(t *testing.T) {
 		}, nil),
 	)
 
-	_, err := api.GetSkill(context.Background(), GetSkillParams{Name: "shared"})
+	_, err := api.GetSkill(context.Background(), GetSkillParams{Name: "shared"}, "")
 	if err == nil || !strings.Contains(err.Error(), "specify namespace") {
 		t.Fatalf("GetSkill(shared) error = %v, want duplicate-name guidance", err)
 	}
@@ -449,7 +584,7 @@ func TestListSkillsPropagatesDecodeErrors(t *testing.T) {
 		},
 	})
 
-	_, err := api.ListSkills(context.Background())
+	_, err := api.ListSkills(context.Background(), "")
 	if err == nil {
 		t.Fatal("ListSkills() error = nil, want decode failure")
 	}
