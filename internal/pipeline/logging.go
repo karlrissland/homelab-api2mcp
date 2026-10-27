@@ -21,12 +21,17 @@ func NewLoggingStage(logger *slog.Logger) Stage {
 				"tool", callToolName(call),
 				"caller_agent_instance", call.Caller.AgentInstance,
 				"tier", call.Caller.Tier,
-				"outcome", outcomeLabel(err),
+				"outcome", outcomeLabel(err, call),
 				"duration_ms", time.Since(startedAt).Milliseconds(),
 			}
 			if err != nil {
 				attrs = append(attrs, "error", err.Error())
 				resolvedLogger.Warn("mcp2rest tool call completed", attrs...)
+				return
+			}
+			if call.RenderResult.IsError {
+				attrs = append(attrs, "upstream_status", call.RenderResult.Response.Status)
+				resolvedLogger.Warn("mcp2rest upstream rejected tool call", attrs...)
 				return
 			}
 			resolvedLogger.Info("mcp2rest tool call completed", attrs...)

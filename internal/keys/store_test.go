@@ -2,6 +2,7 @@ package keys
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,5 +140,70 @@ func TestStoreRevokeMissingKey(t *testing.T) {
 	err := store.Revoke("missing")
 	if !errors.Is(err, ErrKeyNotFound) {
 		t.Fatalf("Revoke() error = %v, want ErrKeyNotFound", err)
+	}
+}
+
+func TestStoreImport(t *testing.T) {
+	t.Parallel()
+
+	record := Record{AgentInstance: "cluster-admin", Tier: manifest.TierAdmin, CreatedAt: time.Now().UTC()}
+	key := strings.Repeat("A", 43)
+	store := NewStore()
+	if err := store.Import(key, record); err != nil {
+		t.Fatalf("Import() error = %v", err)
+	}
+	reimported := record
+	reimported.CreatedAt = record.CreatedAt.Add(time.Hour)
+	if err := store.Import(key, reimported); err != nil {
+		t.Fatalf("Import(repeated) error = %v", err)
+	}
+	got, ok := store.Lookup(key)
+	if !ok || got != record || len(store.List()) != 1 {
+		t.Fatalf("imported record = %+v, found = %t; want original record only", got, ok)
+	}
+
+	for _, conflict := range []Record{
+		{AgentInstance: "another-agent", Tier: record.Tier, CreatedAt: record.CreatedAt},
+		{AgentInstance: record.AgentInstance, Tier: manifest.TierUser, CreatedAt: record.CreatedAt},
+	} {
+		if err := store.Import(key, conflict); err == nil {
+			t.Fatal("Import(conflicting identity/tier) succeeded")
+		}
+		if got, _ := store.Lookup(key); got != record {
+			t.Fatalf("conflicting import changed record to %+v", got)
+		}
+	}
+}
+
+func TestStoreImportValidation(t *testing.T) {
+	t.Parallel()
+
+	validKey := strings.Repeat("A", 43)
+	record := Record{AgentInstance: "cluster-admin", Tier: manifest.TierAdmin, CreatedAt: time.Now().UTC()}
+	for _, tc := range []struct {
+		name   string
+		key    string
+		record Record
+	}{
+		{name: "empty", record: record},
+		{name: "bad encoding", key: "!invalid!", record: record},
+		{name: "wrong length", key: strings.Repeat("A", 42), record: record},
+		{name: "padding", key: validKey + "=", record: record},
+		{name: "noncanonical trailing bits", key: strings.Repeat("A", 42) + "B", record: record},
+		{name: "newline", key: validKey + "\n", record: record},
+		{name: "missing identity", key: validKey, record: Record{Tier: record.Tier, CreatedAt: record.CreatedAt}},
+		{name: "invalid tier", key: validKey, record: Record{AgentInstance: record.AgentInstance, Tier: "invalid", CreatedAt: record.CreatedAt}},
+		{name: "missing time", key: validKey, record: Record{AgentInstance: record.AgentInstance, Tier: record.Tier}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewStore()
+			if err := store.Import(tc.key, tc.record); err == nil {
+				t.Fatal("Import() succeeded, want validation error")
+			}
+			if len(store.List()) != 0 {
+				t.Fatal("invalid import changed verification state")
+			}
+		})
 	}
 }

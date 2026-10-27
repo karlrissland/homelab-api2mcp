@@ -2,6 +2,7 @@ package upstreamcreds
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -73,6 +74,65 @@ func TestReloadAndCredentialLookup(t *testing.T) {
 	}
 }
 
+func TestNativeCredentialRotationAndFailedReload(t *testing.T) {
+	ctx := context.Background()
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "native-mcp-keys", Namespace: "mcp2rest"},
+		Data:       map[string][]byte{"token": []byte("first-token")},
+	})
+	cache, err := New(client, "mcp2rest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apps := []*manifest.App{{Name: "native", UpstreamMCPURL: "http://native.invalid/mcp", UpstreamCredentialEnv: "token"}}
+	if err := cache.Reload(ctx, apps); err != nil {
+		t.Fatal(err)
+	}
+	secret, err := client.CoreV1().Secrets("mcp2rest").Get(ctx, "native-mcp-keys", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret.Data["token"] = []byte("rotated-token")
+	if _, err := client.CoreV1().Secrets("mcp2rest").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.Credential(manifest.ToolTypePassthrough, "native", "token"); got != "first-token" {
+		t.Fatal("credential changed before explicit reload")
+	}
+	if err := cache.Reload(ctx, apps); err != nil {
+		t.Fatal(err)
+	}
+	if got := cache.Credential(manifest.ToolTypePassthrough, "native", "token"); got != "rotated-token" {
+		t.Fatal("reload did not activate rotated credential")
+	}
+	delete(secret.Data, "token")
+	if _, err := client.CoreV1().Secrets("mcp2rest").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Reload(ctx, apps); err == nil || !strings.Contains(err.Error(), "credential key") {
+		t.Fatalf("Reload() error = %v, want missing configured credential", err)
+	}
+	if got := cache.Credential(manifest.ToolTypePassthrough, "native", "token"); got != "rotated-token" {
+		t.Fatal("failed reload replaced the last successful snapshot")
+	}
+}
+
+func TestNativeRequiredCredentialDoesNotUseRESTSecret(t *testing.T) {
+	client := fake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "native-api-keys", Namespace: "mcp2rest"},
+		Data:       map[string][]byte{"token": []byte("rest-only")},
+	})
+	cache, err := New(client, "mcp2rest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.Reload(context.Background(), []*manifest.App{{
+		Name: "native", UpstreamMCPURL: "http://native.invalid/mcp", UpstreamCredentialEnv: "token",
+	}}); err == nil {
+		t.Fatal("reload accepted a missing MCP Secret")
+	}
+}
+
 func TestReloadDropsDeregisteredApps(t *testing.T) {
 	client := fake.NewSimpleClientset(&corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "gitea-api-keys", Namespace: "mcp2rest"},
@@ -82,7 +142,6 @@ func TestReloadDropsDeregisteredApps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-
 	if err := cache.Reload(context.Background(), []*manifest.App{{Name: "gitea"}}); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}

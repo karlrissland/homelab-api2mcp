@@ -1,5 +1,23 @@
 # mcp2rest — REST→MCP Proxy: Feasibility & Architecture Plan
 
+## Bootstrap provisioning update
+
+The implemented bootstrap contract supersedes the mint-and-print proposal
+in Open Decision 5 and Phase 6, and the proposed separate narrow hlctl
+bootstrap key mentioned elsewhere below. The gateway creates or loads
+`mcp2rest-bootstrap-admin` (`key` data entry) in its own namespace before
+listening, restores it after restart, and never prints it. hlctl reads
+this Secret using its Kubernetes credentials and authenticates management
+MCP calls with the **full-admin** key; a registration-only tier is not
+implemented. No agent is automatically given this credential.
+
+See README's bootstrap provisioning section and
+`manifests/rbac/bootstrap-role.yaml` for the current RBAC, readiness,
+retrieval, migration, and manual regeneration contract. Only the bootstrap
+verification record is restored; ordinary agent keys remain in-memory.
+The dated status and original decisions below describe earlier rollout
+state and do not imply this change has been deployed downstream.
+
 ## Current status (2026-10-01)
 
 `homelab-api2mcp` itself (Phases 0–9, 13–14, 16) is implemented, unit
@@ -736,10 +754,10 @@ enough to track in `tasks.md`.
 - **Phase 6 — Management tool set + human-admin bootstrap.**
   - *Goal*: implement `register_app`, `deregister_app`, `list_apps`,
     `create_key`, `list_keys`, `revoke_key`, `rotate_key`, `get_manifest`
-    as real MCP tools, gated by the one bootstrap admin-scope key minted
-    at mcp2rest's first startup (Open Decision 5).
-  - *Deliverables*: `internal/adminapi` (tool handlers), bootstrap-key
-    mint-and-print-once logic on first startup.
+    as real MCP tools, gated by an admin-scope key, including the
+    persisted bootstrap key described in the update above.
+  - *Deliverables*: `internal/adminapi` (tool handlers), `internal/keys`
+    bootstrap Secret create/load and verification restoration at startup.
   - *Test/acceptance*: integration test registers a real app via
     `register_app` and confirms Phase 4's discovery path picks it up
     without a pod restart; confirms a non-admin key cannot call any

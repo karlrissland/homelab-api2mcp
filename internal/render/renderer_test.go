@@ -14,6 +14,30 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 )
 
+func TestRendererPreservesUpstreamFailureContent(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+				if _, err := io.WriteString(w, `{"message":"native refusal"}`); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer upstream.Close()
+			result, err := New(upstream.Client()).Execute(context.Background(), manifest.App{UpstreamBaseURL: upstream.URL}, manifest.Tool{
+				Name: "operation", Type: manifest.ToolTypeRendered,
+				RequestTemplate:  `{"method":"POST","path":"/operation"}`,
+				ResponseTemplate: `{{ response.rawBody }}`,
+			}, Context{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !result.IsError || result.Response.Status != status || result.Content != `{"message":"native refusal"}` {
+				t.Fatalf("Execute() = %+v, want error with original refusal", result)
+			}
+		})
+	}
+}
 func TestRendererExecuteRoundTrip(t *testing.T) {
 	t.Parallel()
 

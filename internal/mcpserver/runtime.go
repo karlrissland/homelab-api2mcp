@@ -22,6 +22,11 @@ import (
 const managementPath = "/mcp"
 const metricsPath = "/metrics"
 
+// NativeProxy forwards authenticated requests to an app's native MCP endpoint.
+type NativeProxy interface {
+	Forward(http.ResponseWriter, *http.Request, manifest.App, string)
+}
+
 // callerUsernameArgument is a reserved top-level tool argument used to
 // carry the end-user identity an agent is acting on behalf of for one
 // call. We intentionally use a namespaced argument instead of MCP
@@ -36,6 +41,7 @@ type runtimeHandler struct {
 	store    *keys.Store
 	renderer *render.Renderer
 	relay    pipeline.PassthroughRelay
+	proxy    NativeProxy
 	resolver pipeline.CredentialResolver
 	admin    *adminapi.API
 	skills   *skillstools.API
@@ -52,13 +58,14 @@ type route struct {
 
 // NewRuntimeHandler builds the runtime HTTP surface: Prometheus metrics on
 // /metrics, management tools on /mcp, per-app proxied tools on /{app}/mcp,
-// and the built-in Phase 7 skills tools on both management and per-app
-// routes.
+// and native endpoint passthrough on /{app}/mcp when no tools are declared.
+// Built-in skills tools remain on management and locally defined app routes.
 func NewRuntimeHandler(
 	table *discovery.Table,
 	store *keys.Store,
 	renderer *render.Renderer,
 	relay pipeline.PassthroughRelay,
+	proxy NativeProxy,
 	resolver pipeline.CredentialResolver,
 	admin *adminapi.API,
 	skillClient dynamic.Interface,
@@ -73,6 +80,8 @@ func NewRuntimeHandler(
 		return nil, fmt.Errorf("new runtime handler: key store is required")
 	case renderer == nil:
 		return nil, fmt.Errorf("new runtime handler: renderer is required")
+	case proxy == nil:
+		return nil, fmt.Errorf("new runtime handler: native proxy is required")
 	case admin == nil:
 		return nil, fmt.Errorf("new runtime handler: admin api is required")
 	case skillClient == nil:
@@ -87,6 +96,7 @@ func NewRuntimeHandler(
 		store:    store,
 		renderer: renderer,
 		relay:    relay,
+		proxy:    proxy,
 		resolver: resolver,
 		admin:    admin,
 		metrics:  metrics,
@@ -117,8 +127,23 @@ func (h *runtimeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	if !rt.management {
-		if _, exists := h.table.Get(rt.appName); !exists {
+		app, exists := h.table.Get(rt.appName)
+		if !exists {
 			http.NotFound(w, req)
+			return
+		}
+		if app.IsNativeMCP() {
+			record, authenticated := h.lookupKey(bearerToken(req))
+			if !authenticated || !record.Tier.Valid() {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="mcp2rest"`)
+				http.Error(w, "valid gateway API key required", http.StatusUnauthorized)
+				return
+			}
+			var credential string
+			if h.resolver != nil && app.UpstreamCredentialEnv != "" {
+				credential = h.resolver.Credential(manifest.ToolTypePassthrough, app.Name, app.UpstreamCredentialEnv)
+			}
+			h.proxy.Forward(w, req, *app, credential)
 			return
 		}
 	}
@@ -245,6 +270,7 @@ func (h *runtimeHandler) registerAppTools(server *mcp.Server, app manifest.App, 
 				return nil, nil, err
 			}
 			return &mcp.CallToolResult{
+				IsError: call.RenderResult.IsError,
 				Content: []mcp.Content{
 					&mcp.TextContent{Text: call.ResultContent},
 				},

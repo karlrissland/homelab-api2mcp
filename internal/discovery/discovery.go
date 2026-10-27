@@ -31,7 +31,9 @@ const (
 
 // Table maintains the live app routing table populated from ConfigMaps.
 type Table struct {
+	client   kubernetes.Interface
 	informer cache.SharedIndexInformer
+	synced   cache.InformerSynced
 
 	mu          sync.RWMutex
 	routes      map[string]*manifest.App
@@ -56,19 +58,22 @@ func New(client kubernetes.Interface) (*Table, error) {
 	)
 
 	table := &Table{
+		client:      client,
 		informer:    factory.Core().V1().ConfigMaps().Informer(),
 		routes:      make(map[string]*manifest.App),
 		sourceToApp: make(map[string]string),
 		appToSource: make(map[string]string),
 	}
 
-	if _, err := table.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	registration, err := table.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    table.onAdd,
 		UpdateFunc: table.onUpdate,
 		DeleteFunc: table.onDelete,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("create discovery table: add informer handler: %w", err)
 	}
+	table.synced = registration.HasSynced
 
 	return table, nil
 }
@@ -86,7 +91,7 @@ func (t *Table) Run(ctx context.Context) error {
 		t.informer.Run(ctx.Done())
 	}()
 
-	if !cache.WaitForCacheSync(ctx.Done(), t.informer.HasSynced) {
+	if err := t.WaitForSync(ctx); err != nil {
 		if err := ctx.Err(); err != nil {
 			<-runDone
 			return nil
@@ -97,6 +102,39 @@ func (t *Table) Run(ctx context.Context) error {
 	<-ctx.Done()
 	<-runDone
 	return nil
+}
+
+// WaitForSync waits until initial ConfigMaps have been applied to the routing
+// table, not just received by the informer.
+func (t *Table) WaitForSync(ctx context.Context) error {
+	if !cache.WaitForCacheSync(ctx.Done(), t.synced) {
+		return fmt.Errorf("wait for discovery sync: %w", ctx.Err())
+	}
+	return nil
+}
+
+// Snapshot reads persisted registrations directly, so an explicit credential
+// reload cannot miss an app whose informer event has not been processed yet.
+func (t *Table) Snapshot(ctx context.Context) ([]*manifest.App, error) {
+	configMaps, err := t.client.CoreV1().ConfigMaps(metav1.NamespaceAll).List(ctx, metav1.ListOptions{LabelSelector: AppLabelKey})
+	if err != nil {
+		return nil, fmt.Errorf("list app registrations: %w", err)
+	}
+	apps := make([]*manifest.App, 0, len(configMaps.Items))
+	seen := make(map[string]bool, len(configMaps.Items))
+	for i := range configMaps.Items {
+		app, err := ParseConfigMap(&configMaps.Items[i])
+		if err != nil {
+			return nil, fmt.Errorf("read app registrations: %w", err)
+		}
+		if seen[app.Name] {
+			return nil, fmt.Errorf("read app registrations: duplicate app %q", app.Name)
+		}
+		seen[app.Name] = true
+		apps = append(apps, app)
+	}
+	sort.Slice(apps, func(i, j int) bool { return apps[i].Name < apps[j].Name })
+	return apps, nil
 }
 
 // Get returns the app registered under appName.
@@ -360,14 +398,16 @@ func cloneApp(app *manifest.App) *manifest.App {
 
 	for i, tool := range app.Tools {
 		cloned.Tools[i] = manifest.Tool{
-			Name:             tool.Name,
-			Description:      tool.Description,
-			Tier:             tool.Tier,
-			Type:             tool.Type,
-			RequestTemplate:  tool.RequestTemplate,
-			ResponseTemplate: tool.ResponseTemplate,
-			UpstreamToolName: tool.UpstreamToolName,
-			InputSchema:      cloneStringAnyMap(tool.InputSchema),
+			Name:                  tool.Name,
+			Description:           tool.Description,
+			Tier:                  tool.Tier,
+			Type:                  tool.Type,
+			RequestTemplate:       tool.RequestTemplate,
+			ResponseTemplate:      tool.ResponseTemplate,
+			UpstreamToolName:      tool.UpstreamToolName,
+			InputSchema:           cloneStringAnyMap(tool.InputSchema),
+			UpstreamCredentialEnv: tool.UpstreamCredentialEnv,
+			UpstreamMCPURL:        tool.UpstreamMCPURL,
 		}
 	}
 

@@ -62,23 +62,57 @@ func (s *Store) Mint(agentInstance string, tier manifest.Tier) (string, error) {
 		return "", fmt.Errorf("mint key for agent instance %q: invalid tier %q", agentInstance, tier)
 	}
 
-	buf := make([]byte, keyBytes)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("mint key for agent instance %q: read random bytes: %w", agentInstance, err)
+	key, err := s.generateKey()
+	if err != nil {
+		return "", fmt.Errorf("mint key for agent instance %q: %w", agentInstance, err)
 	}
-
-	key := s.encoding.EncodeToString(buf)
 	record := Record{
 		AgentInstance: agentInstance,
 		Tier:          tier,
 		CreatedAt:     s.now().UTC(),
 	}
 
-	s.mu.Lock()
-	s.records[digestKey(key)] = record
-	s.mu.Unlock()
-
+	if err := s.Import(key, record); err != nil {
+		return "", fmt.Errorf("mint key for agent instance %q: %w", agentInstance, err)
+	}
 	return key, nil
+}
+
+// Import restores verification state for a persisted key without retaining its
+// raw value. Reimporting the same key and identity preserves its existing record.
+func (s *Store) Import(key string, record Record) error {
+	if record.AgentInstance == "" {
+		return fmt.Errorf("import key: agent instance is required")
+	}
+	if !record.Tier.Valid() {
+		return fmt.Errorf("import key: invalid tier %q", record.Tier)
+	}
+	if record.CreatedAt.IsZero() {
+		return fmt.Errorf("import key: creation time is required")
+	}
+	decoded, err := s.encoding.Strict().DecodeString(key)
+	if err != nil || len(decoded) != keyBytes || s.encoding.EncodeToString(decoded) != key {
+		return fmt.Errorf("import key: expected a canonical base64url-encoded 32-byte key")
+	}
+	digest := digestKey(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.records[digest]; ok {
+		if existing.AgentInstance != record.AgentInstance || existing.Tier != record.Tier {
+			return fmt.Errorf("import key: key is already registered for a different identity or tier")
+		}
+		return nil
+	}
+	s.records[digest] = record
+	return nil
+}
+
+func (s *Store) generateKey() (string, error) {
+	buf := make([]byte, keyBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random key bytes: %w", err)
+	}
+	return s.encoding.EncodeToString(buf), nil
 }
 
 // DisableAuth puts the store into an insecure "auth disabled" mode: every

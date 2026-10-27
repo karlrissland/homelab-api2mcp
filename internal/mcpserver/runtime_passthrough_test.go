@@ -124,13 +124,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 			},
 		},
 	})
-	adminKey, created, err := admin.EnsureBootstrapAdminKey(testWriter{t})
-	if err != nil {
-		t.Fatalf("EnsureBootstrapAdminKey() error = %v", err)
-	}
-	if !created || adminKey == "" {
-		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
-	}
+	adminKey := bootstrapAdminKey(t, client, writer, store)
 
 	metrics, logger, metricsHandler := testRuntimeObservability(t)
 	handler, err := NewRuntimeHandler(
@@ -138,6 +132,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 		store,
 		render.New(http.DefaultClient),
 		passthrough.New(upstream.Client()),
+		passthrough.NewProxy(upstream.Client().Transport, logger),
 		creds,
 		admin,
 		skillClient,

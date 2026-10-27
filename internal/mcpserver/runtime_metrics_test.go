@@ -15,6 +15,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/adminapi"
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
+	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
 	"github.com/karlrissland/homelab-api2mcp/internal/skillstools"
 )
@@ -46,7 +47,7 @@ func TestRuntimeHandlerServesMetricsEndpoint(t *testing.T) {
 
 	metrics, logger, metricsHandler := testRuntimeObservability(t)
 	metrics.Observe("demo", "list_repos", "success", 50*time.Millisecond)
-	handler, err := NewRuntimeHandler(table, store, render.New(http.DefaultClient), nil, creds, admin, skillClient, metrics, logger, metricsHandler)
+	handler, err := NewRuntimeHandler(table, store, render.New(http.DefaultClient), nil, passthrough.NewProxy(http.DefaultTransport, logger), creds, admin, skillClient, metrics, logger, metricsHandler)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}

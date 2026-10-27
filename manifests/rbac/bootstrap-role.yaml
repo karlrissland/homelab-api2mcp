@@ -1,0 +1,31 @@
+# Apply before starting mcp2rest. Render all namespace fields and the
+# ServiceAccount name to match the deployment when using non-default values.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp2rest-bootstrap
+  namespace: mcp2rest
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["mcp2rest-bootstrap-admin"]
+    verbs: ["get"]
+  # Kubernetes cannot restrict create by resourceNames. This grant is confined
+  # to the gateway namespace; no list/watch/update/delete is needed.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp2rest-bootstrap
+  namespace: mcp2rest
+subjects:
+  - kind: ServiceAccount
+    name: mcp2rest
+    namespace: mcp2rest
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mcp2rest-bootstrap

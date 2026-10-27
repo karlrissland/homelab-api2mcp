@@ -8,9 +8,9 @@
 // list, and lookups never touch the Kubernetes API directly. This keeps
 // per-call latency low and only requires `get` RBAC on Secrets in
 // mcp2rest's own namespace (the app-instance names are already known
-// from discovery, so no `list`/`watch` on Secrets is needed). A missing
-// Secret is not an error — it fails open to an empty credential, and the
-// backend's own auth rejection becomes the caller-visible error.
+// from discovery, so no `list`/`watch` on Secrets is needed). Legacy per-tool
+// mappings allow missing credentials; native endpoints require any configured
+// credential.
 package upstreamcreds
 
 import (
@@ -43,9 +43,10 @@ type Cache struct {
 	client    kubernetes.Interface
 	namespace string
 
-	mu  sync.RWMutex
-	api map[string]map[string]string
-	mcp map[string]map[string]string
+	mu       sync.RWMutex
+	reloadMu sync.Mutex
+	api      map[string]map[string]string
+	mcp      map[string]map[string]string
 }
 
 // New builds a Cache that reads Secrets from the provided namespace
@@ -68,9 +69,11 @@ func New(client kubernetes.Interface, namespace string) (*Cache, error) {
 
 // Reload rebuilds the cache from scratch against the provided list of
 // currently known apps, dropping any app no longer present. A missing
-// Secret for a given app yields an empty credential map for that app
-// (fail-open), not an error.
+// explicitly configured native endpoint credential is an error. Failed reloads
+// keep the last snapshot; missing credentials retain legacy per-tool behavior.
 func (c *Cache) Reload(ctx context.Context, apps []*manifest.App) error {
+	c.reloadMu.Lock()
+	defer c.reloadMu.Unlock()
 	api := make(map[string]map[string]string, len(apps))
 	mcp := make(map[string]map[string]string, len(apps))
 
@@ -85,6 +88,9 @@ func (c *Cache) Reload(ctx context.Context, apps []*manifest.App) error {
 		mcpData, err := c.readSecret(ctx, MCPKeysSecretName(app.Name))
 		if err != nil {
 			return fmt.Errorf("reload upstream credentials for app %q: %w", app.Name, err)
+		}
+		if app.IsNativeMCP() && app.UpstreamCredentialEnv != "" && mcpData[app.UpstreamCredentialEnv] == "" {
+			return fmt.Errorf("reload upstream credentials for app %q: credential key %q is missing from Secret %q", app.Name, app.UpstreamCredentialEnv, MCPKeysSecretName(app.Name))
 		}
 		api[app.Name] = apiData
 		mcp[app.Name] = mcpData

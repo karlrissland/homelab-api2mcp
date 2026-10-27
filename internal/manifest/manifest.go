@@ -9,7 +9,10 @@
 // inventing its own incompatible shape.
 package manifest
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+)
 
 // Tier is the authorization level required to call a tool, or held by a
 // key. Admin implies User: a key with TierAdmin may call User-tier tools
@@ -140,17 +143,18 @@ type App struct {
 	Name string `json:"name"`
 	// Namespace is the Kubernetes namespace owning the source ConfigMap.
 	Namespace string `json:"namespace"`
-	// Tools is the set of MCP tools this app exposes.
-	Tools []Tool `json:"tools"`
+	// Tools is the set of locally defined tools. Omit it to proxy the
+	// entire native endpoint at UpstreamMCPURL without recreating tools.
+	Tools []Tool `json:"tools,omitempty"`
 	// UpstreamBaseURL is the base URL rendered requests are issued
 	// against (rendered tools only).
 	UpstreamBaseURL string `json:"upstreamBaseURL,omitempty"`
 	// UpstreamCredentialEnv names the credential this app's requests are
 	// authenticated with, resolved out-of-band via the existing
-	// internal/credentials-equivalent flow (rendered tools only).
+	// Secret cache. Native endpoints use the app's mcp-keys Secret.
 	UpstreamCredentialEnv string `json:"upstreamCredentialEnv,omitempty"`
 	// UpstreamMCPURL is the upstream MCP server URL to relay to
-	// (passthrough tools only).
+	// (native endpoints and individually declared passthrough tools).
 	UpstreamMCPURL string `json:"upstreamMCPURL,omitempty"`
 	// MCPEndpointPath is this app's own mcp2rest-proxied MCP endpoint
 	// path, e.g. "/metube/mcp" (always "/" + Name + "/mcp"). It is a
@@ -185,6 +189,13 @@ func (a App) Validate() error {
 	if a.Name == "" {
 		return fmt.Errorf("app: name is required")
 	}
+	if a.IsNativeMCP() {
+		upstream, err := url.Parse(a.UpstreamMCPURL)
+		if err != nil || upstream.Hostname() == "" || (upstream.Scheme != "http" && upstream.Scheme != "https") || upstream.User != nil || upstream.Fragment != "" {
+			return fmt.Errorf("app %q: native upstreamMCPURL must be an absolute HTTP(S) URL without userinfo or a fragment", a.Name)
+		}
+		return nil
+	}
 	if len(a.Tools) == 0 {
 		return fmt.Errorf("app %q: at least one tool is required", a.Name)
 	}
@@ -202,6 +213,12 @@ func (a App) Validate() error {
 		}
 	}
 	return nil
+}
+
+// IsNativeMCP reports whether the entire upstream MCP endpoint is proxied.
+// Explicitly declared tools retain the existing rendered/per-tool behavior.
+func (a App) IsNativeMCP() bool {
+	return len(a.Tools) == 0 && a.UpstreamMCPURL != ""
 }
 
 // FindTool returns the named tool and true, or a zero Tool and false.

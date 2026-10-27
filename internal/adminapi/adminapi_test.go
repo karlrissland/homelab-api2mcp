@@ -1,7 +1,6 @@
 package adminapi
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"strings"
@@ -52,35 +51,6 @@ func TestRequireAdminRejectsEmptyKeyWhenAuthEnabled(t *testing.T) {
 
 	if err := api.requireAdmin(""); err == nil {
 		t.Fatal("requireAdmin(\"\") with auth enabled = nil error, want an error")
-	}
-}
-
-func TestEnsureBootstrapAdminKeyPrintsOnce(t *testing.T) {
-	t.Parallel()
-
-	api := newTestAPI(t)
-	var out bytes.Buffer
-
-	key, created, err := api.EnsureBootstrapAdminKey(&out)
-	if err != nil {
-		t.Fatalf("EnsureBootstrapAdminKey(first) error = %v", err)
-	}
-	if !created || key == "" {
-		t.Fatalf("EnsureBootstrapAdminKey(first) = (%q, %t), want created non-empty key", key, created)
-	}
-	if !bytes.Contains(out.Bytes(), []byte(key)) {
-		t.Fatalf("bootstrap output did not include key %q: %q", key, out.String())
-	}
-
-	key, created, err = api.EnsureBootstrapAdminKey(&out)
-	if err != nil {
-		t.Fatalf("EnsureBootstrapAdminKey(second) error = %v", err)
-	}
-	if created || key != "" {
-		t.Fatalf("EnsureBootstrapAdminKey(second) = (%q, %t), want no-op", key, created)
-	}
-	if got := len(api.store.List()); got != 1 {
-		t.Fatalf("store.List() length = %d, want 1 bootstrap key", got)
 	}
 }
 
@@ -511,11 +481,43 @@ func newTestAPI(t *testing.T) *API {
 type stubCredentialReloader struct {
 	called int
 	err    error
+	apps   []*manifest.App
 }
 
-func (s *stubCredentialReloader) Reload(context.Context, []*manifest.App) error {
+func (s *stubCredentialReloader) Reload(_ context.Context, apps []*manifest.App) error {
 	s.called++
+	s.apps = apps
 	return s.err
+}
+
+func TestNativeRegistrationAndReloadBeforeInformerDelivery(t *testing.T) {
+	api := newTestAPI(t)
+	ctx := context.Background()
+	params := RegisterAppParams{
+		Namespace: "apps",
+		Manifest: manifest.App{
+			Name: "native", UpstreamMCPURL: "http://native.apps.svc/api/mcp",
+			UpstreamCredentialEnv: "token",
+		},
+	}
+	if _, err := api.RegisterApp(ctx, params); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := api.table.Get("native"); ok {
+		t.Fatal("test requires an undelivered informer event")
+	}
+	result, err := api.ReloadCache(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stub := api.creds.(*stubCredentialReloader)
+	if result.Apps != 1 || len(stub.apps) != 1 || !stub.apps[0].IsNativeMCP() || stub.apps[0].UpstreamCredentialEnv != "token" {
+		t.Fatalf("reload did not receive persisted native registration: %+v", stub.apps)
+	}
+	stub.err = context.DeadlineExceeded
+	if _, err := api.ReloadCache(ctx); err == nil {
+		t.Fatal("reload reported success despite credential activation failure")
+	}
 }
 
 func runDiscovery(t *testing.T, table *discovery.Table, ctx context.Context) {

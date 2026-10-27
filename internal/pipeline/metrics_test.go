@@ -68,6 +68,28 @@ func TestMetricsStageRecordsStageFailureOutcome(t *testing.T) {
 	}
 }
 
+func TestMetricsStageDoesNotCountRESTRefusalAsSuccess(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	metrics, err := NewMetrics(registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := &CallContext{App: testApp(), ToolName: "operation"}
+	err = NewExecutor(NewMetricsStage(metrics), NewStage(upstreamCallStageName, func(_ context.Context, call *CallContext) error {
+		call.RenderResult.IsError = true
+		return nil
+	})).Run(context.Background(), call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testCounterValue(t, metrics.requests, "demo-app", "operation", upstreamCallStageName); got != 1 {
+		t.Fatalf("upstream failure counter = %v, want 1", got)
+	}
+	if got := testCounterValue(t, metrics.requests, "demo-app", "operation", "success"); got != 0 {
+		t.Fatalf("success counter = %v, want 0", got)
+	}
+}
+
 func testApp() manifest.App {
 	return manifest.App{Name: "demo-app"}
 }

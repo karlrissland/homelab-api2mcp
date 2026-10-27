@@ -158,3 +158,41 @@ func TestAppFindTool(t *testing.T) {
 		t.Error("expected not to find missing tool")
 	}
 }
+
+func TestNativeEndpointManifest(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		url  string
+		ok   bool
+	}{
+		{"HTTP endpoint", "http://native.apps.svc:8123/api/mcp", true},
+		{"HTTPS endpoint", "https://native.example.invalid/mcp", true},
+		{"missing endpoint", "", false},
+		{"relative endpoint", "/api/mcp", false},
+		{"wrong protocol", "ws://native.example.invalid/api/mcp", false},
+		{"missing host", "https:///api/mcp", false},
+		{"malformed URL", "http://native.invalid/%zz", false},
+		{"embedded credential", "https://user:password@native.invalid/mcp", false},
+		{"fragment", "https://native.invalid/mcp#fragment", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			app := App{Name: "native", UpstreamMCPURL: tt.url}
+			if err := app.Validate(); (err == nil) != tt.ok {
+				t.Fatalf("Validate() error = %v, want valid=%t", err, tt.ok)
+			}
+			if tt.ok && !app.IsNativeMCP() {
+				t.Fatal("endpoint-only manifest did not select native passthrough")
+			}
+		})
+	}
+
+	app := App{Name: "legacy", UpstreamMCPURL: "https://native.invalid/mcp", Tools: []Tool{
+		{Name: "echo", Tier: TierUser, Type: ToolTypePassthrough, UpstreamToolName: "echo"},
+	}}
+	if err := app.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if app.IsNativeMCP() {
+		t.Fatal("explicit per-tool manifest selected whole-endpoint passthrough")
+	}
+}

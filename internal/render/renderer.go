@@ -43,6 +43,7 @@ type Result struct {
 	Request  Request
 	Response Response
 	Content  string
+	IsError  bool
 }
 
 // Renderer renders request/response Liquid templates around an upstream
@@ -117,6 +118,7 @@ func (r *Renderer) Execute(ctx context.Context, app manifest.App, tool manifest.
 		Request:  req,
 		Response: renderableResp,
 		Content:  content,
+		IsError:  httpResp.StatusCode >= http.StatusBadRequest,
 	}, nil
 }
 

@@ -3,7 +3,6 @@ package adminapi
 import (
 	"context"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 
@@ -17,8 +16,6 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
 	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 )
-
-const bootstrapAdminAgent = "cluster-admin"
 
 // CredentialReloader rebuilds the upstream credential cache
 // (internal/upstreamcreds) from the currently known app list. It is a
@@ -216,32 +213,6 @@ func (a *API) SetInternalBaseURL(baseURL string) {
 	a.internalBaseURL = strings.TrimSuffix(baseURL, "/")
 }
 
-// EnsureBootstrapAdminKey mints the one bootstrap admin key once per process
-// lifetime and writes it only to the provided output stream for this v1 phase.
-func (a *API) EnsureBootstrapAdminKey(w io.Writer) (string, bool, error) {
-	if w == nil {
-		return "", false, fmt.Errorf("bootstrap admin key: output writer is required")
-	}
-	for _, record := range a.store.List() {
-		if record.AgentInstance == bootstrapAdminAgent && record.Tier == manifest.TierAdmin {
-			return "", false, nil
-		}
-	}
-
-	key, err := a.store.Mint(bootstrapAdminAgent, manifest.TierAdmin)
-	if err != nil {
-		return "", false, fmt.Errorf("bootstrap admin key: %w", err)
-	}
-
-	// v1 intentionally delivers the bootstrap key only to process output so it
-	// is impossible to miss but not broadly persisted in-cluster.
-	if _, err := fmt.Fprintf(w, "\n===== MCP2REST BOOTSTRAP ADMIN KEY =====\n%s\n========================================\n", key); err != nil {
-		return "", false, fmt.Errorf("bootstrap admin key: write banner: %w", err)
-	}
-
-	return key, true, nil
-}
-
 // RegisterTools adds the reserved management tools to server, authorizing
 // every call with the provided raw API key.
 func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
@@ -404,7 +375,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "reload_cache",
-		Description: "Reload the in-memory upstream credential cache from the current discovery table. Call after provisioning or rotating an app's api-keys/mcp-keys Secret.",
+		Description: "Reload upstream credentials for persisted app registrations. Call after provisioning or rotating an app's api-keys/mcp-keys Secret; it does not depend on informer delivery.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ReloadCacheResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ReloadCacheResult{}, err
@@ -533,10 +504,13 @@ func (a *API) GetManifest(_ context.Context, params GetManifestParams) (manifest
 	return result, nil
 }
 
-// ReloadCache rebuilds the in-memory upstream credential cache from the
-// apps currently visible in the live discovery table.
+// ReloadCache rebuilds upstream credentials from persisted app registrations,
+// including registrations whose informer events are still pending.
 func (a *API) ReloadCache(ctx context.Context) (ReloadCacheResult, error) {
-	apps := a.table.List()
+	apps, err := a.table.Snapshot(ctx)
+	if err != nil {
+		return ReloadCacheResult{}, fmt.Errorf("reload cache: %w", err)
+	}
 	if err := a.creds.Reload(ctx, apps); err != nil {
 		return ReloadCacheResult{}, fmt.Errorf("reload cache: %w", err)
 	}

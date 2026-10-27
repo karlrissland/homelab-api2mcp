@@ -15,6 +15,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,10 +38,14 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		if r.URL.Path != "/repos" {
 			t.Fatalf("upstream path = %q, want /repos", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("page"); got != "2" {
-			t.Fatalf("upstream page query = %q, want 2", got)
+		if got := r.URL.Query().Get("page"); got != "2" && got != "3" {
+			t.Fatalf("upstream page query = %q, want 2 or 3", got)
 		}
+
 		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("page") == "3" {
+			w.WriteHeader(http.StatusForbidden)
+		}
 		if err := json.NewEncoder(w).Encode([]map[string]any{
 			{"full_name": "octocat/hello-world"},
 		}); err != nil {
@@ -105,21 +110,35 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 			},
 		},
 	})
-	adminKey, created, err := admin.EnsureBootstrapAdminKey(testWriter{t})
-	if err != nil {
-		t.Fatalf("EnsureBootstrapAdminKey() error = %v", err)
-	}
-	if !created || adminKey == "" {
-		t.Fatalf("EnsureBootstrapAdminKey() = (%q, %t), want created bootstrap key", adminKey, created)
-	}
+	adminKey := bootstrapAdminKey(t, client, writer, store)
 
 	metrics, logger, metricsHandler := testRuntimeObservability(t)
-	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), creds, admin, skillClient, metrics, logger, metricsHandler)
+	handler, err := NewRuntimeHandler(table, store, render.New(upstream.Client()), passthrough.New(upstream.Client()), passthrough.NewProxy(upstream.Client().Transport, logger), creds, admin, skillClient, metrics, logger, metricsHandler)
 	if err != nil {
 		t.Fatalf("NewRuntimeHandler() error = %v", err)
 	}
 	server := httptest.NewServer(handler)
 	defer server.Close()
+
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "missing bootstrap credential"},
+		{name: "unknown bootstrap credential", token: "unknown-key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := connectHTTPClient(t, server.URL+managementPath, tc.token)
+			defer func() { _ = session.Close() }()
+			result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_apps"})
+			if err != nil {
+				t.Fatalf("list_apps transport error = %v", err)
+			}
+			if !result.IsError {
+				t.Fatal("management call succeeded without the persisted bootstrap credential")
+			}
+		})
+	}
 
 	adminSession := connectHTTPClient(t, server.URL+managementPath, adminKey)
 	defer func() { _ = adminSession.Close() }()
@@ -207,6 +226,13 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		t.Fatalf("CallTool(list_repos) text = %q, want %q", got, "octocat/hello-world")
 	}
 
+	failedResult, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "list_repos", Arguments: map[string]any{"page": 3},
+	})
+	if err != nil || !failedResult.IsError || strings.TrimSpace(joinedText(failedResult)) != "octocat/hello-world" {
+		t.Fatalf("REST rejection did not retain mapped content and isError: result=%+v, error=%v", failedResult, err)
+	}
+
 	listSkills, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_demo_skills"})
 	if err != nil {
 		t.Fatalf("CallTool(list_demo_skills) error = %v", err)
@@ -247,13 +273,24 @@ func (t authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(cloned)
 }
 
-type testWriter struct {
-	t *testing.T
-}
+func bootstrapAdminKey(t *testing.T, client *kubernetesfake.Clientset, writer *keys.SecretWriter, store *keys.Store) string {
+	t.Helper()
 
-func (w testWriter) Write(p []byte) (int, error) {
-	w.t.Log(strings.TrimSpace(string(p)))
-	return len(p), nil
+	// Discard the first process's verification state to exercise authenticated
+	// management calls using only the credential restored from Kubernetes.
+	created, err := writer.EnsureBootstrap(context.Background(), "mcp2rest", keys.NewStore())
+	if err != nil || !created {
+		t.Fatalf("EnsureBootstrap(first startup) created = %t, error = %v", created, err)
+	}
+	created, err = writer.EnsureBootstrap(context.Background(), "mcp2rest", store)
+	if err != nil || created {
+		t.Fatalf("EnsureBootstrap(restart) created = %t, error = %v", created, err)
+	}
+	secret, err := client.CoreV1().Secrets("mcp2rest").Get(context.Background(), keys.BootstrapSecretName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get(bootstrap Secret) error = %v", err)
+	}
+	return string(secret.Data[keys.BootstrapSecretDataKey])
 }
 
 func connectHTTPClient(t *testing.T, endpoint, token string) *mcp.ClientSession {

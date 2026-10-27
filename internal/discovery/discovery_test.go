@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -133,13 +134,112 @@ func TestTableIgnoresConfigMapsWithoutDiscoveryLabel(t *testing.T) {
 	}
 }
 
+func TestNativeRegistrationSnapshotWithoutInformer(t *testing.T) {
+	app := manifest.App{
+		Name: "native", UpstreamMCPURL: "http://native.apps.svc/api/mcp",
+		UpstreamCredentialEnv: "native-token",
+	}
+	cm, err := BuildConfigMap("apps", "native-tools", app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table, err := New(fake.NewSimpleClientset(cm))
+	if err != nil {
+		t.Fatal(err)
+	}
+	apps, err := table.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 1 || !apps[0].IsNativeMCP() || apps[0].UpstreamCredentialEnv != "native-token" || apps[0].Namespace != "apps" {
+		t.Fatalf("Snapshot() = %+v, want native registration with credential reference", apps)
+	}
+}
+
+func TestSnapshotRejectsInvalidOrConflictingRegistrations(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		invalid bool
+	}{
+		{"invalid registration", true},
+		{"conflicting app names", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			first := newValidConfigMap("apps", "first", "demo")
+			second := newValidConfigMap("other", "second", "demo")
+			if tt.invalid {
+				second.Data["manifest.yaml"] = "name: demo"
+			}
+			table, err := New(fake.NewSimpleClientset(first, second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := table.Snapshot(context.Background()); err == nil {
+				t.Fatal("snapshot silently accepted an invalid or conflicting registration")
+			}
+		})
+	}
+}
+
+func TestWaitForSyncIncludesInitialRegistrations(t *testing.T) {
+	table, err := New(fake.NewSimpleClientset(newValidConfigMap("apps", "demo-tools", "demo")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	done := make(chan error, 1)
+	go func() { done <- table.Run(ctx) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := table.WaitForSync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if app, ok := table.Get("demo"); !ok || len(app.Tools) != 1 {
+		t.Fatal("initial registration was not applied before WaitForSync returned")
+	}
+}
+
+func TestWaitForSyncCancellation(t *testing.T) {
+	table, err := New(fake.NewSimpleClientset())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := table.WaitForSync(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("WaitForSync() error = %v, want context cancellation", err)
+	}
+}
+
+func TestConfigMapPreservesPerToolUpstreamOverrides(t *testing.T) {
+	app := manifest.App{Name: "legacy", Tools: []manifest.Tool{{
+		Name: "echo", Tier: manifest.TierUser, Type: manifest.ToolTypePassthrough,
+		UpstreamToolName: "echo", UpstreamMCPURL: "https://override.invalid/mcp",
+		UpstreamCredentialEnv: "tool-token",
+	}}}
+	cm, err := BuildConfigMap("apps", "legacy-tools", app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseConfigMap(cm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Tools[0].UpstreamMCPURL != app.Tools[0].UpstreamMCPURL || parsed.Tools[0].UpstreamCredentialEnv != "tool-token" {
+		t.Fatalf("round-trip lost upstream overrides: %+v", parsed.Tools[0])
+	}
+}
+
 func TestTableRejectsInvalidManifestAndKeepsRunning(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	table, err := New(client)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

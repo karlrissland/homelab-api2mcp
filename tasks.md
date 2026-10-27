@@ -67,7 +67,7 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 | Status | Task |
 |---|---|
-| done | Bootstrap admin-scope key mint-and-print-once on first startup |
+| done | Persistent bootstrap admin credential: create/load gateway-namespace `mcp2rest-bootstrap-admin`, restore verification on restart, fail closed on invalid data/access errors, and never print the key. Namespace-scoped RBAC and hlctl retrieval contract are documented in README. |
 | done | `register_app` / `deregister_app` |
 | done | `list_apps` / `get_manifest` |
 | done | `create_key` / `list_keys` / `revoke_key` / `rotate_key` |
@@ -384,4 +384,3 @@ admin-tier caller legitimately needs to browse/manage every app's Skills).
 | done | `internal/mcpserver.appInstructions`: documents the actual per-app tool names (`list_<app>_skills`/`get_<app>_skill`) and explicitly warns not to confuse them with the management endpoint's generic names |
 | done | Tests: `internal/skillstools` -- new `TestListSkillsAppScopeFiltersToOwnAppPlusGlobal`, `TestGetSkillAppScopeRejectsOtherApp` (cross-app fetch reported as not-found, not leaked), `TestRegisterReadToolsNamesAreAppScoped` (asserts exact tool names for both a per-app and the management registration); updated existing per-app `ListTools()` assertions in `internal/mcpserver/runtime_test.go` and `runtime_passthrough_test.go` to the new `list_<app>_skills`/`get_<app>_skill` names |
 | done | `go build ./...`, `go vet ./...`, `gofmt -l .`, `golangci-lint run ./...`, `go test ./...` all clean |
-

@@ -63,7 +63,7 @@ func NewMetricsStage(metrics *Metrics) Stage {
 
 		startedAt := time.Now()
 		call.addFinalizer(func(err error) {
-			metrics.Observe(callAppName(call), callToolName(call), outcomeLabel(err), time.Since(startedAt))
+			metrics.Observe(callAppName(call), callToolName(call), outcomeLabel(err, call), time.Since(startedAt))
 		})
 		return nil
 	})
@@ -78,8 +78,11 @@ func (m *Metrics) Observe(app, tool, outcome string, duration time.Duration) {
 	m.latency.WithLabelValues(app, tool, outcome).Observe(duration.Seconds())
 }
 
-func outcomeLabel(err error) string {
+func outcomeLabel(err error, call *CallContext) string {
 	if err == nil {
+		if call != nil && call.RenderResult.IsError {
+			return upstreamCallStageName
+		}
 		return "success"
 	}
 

@@ -72,6 +72,9 @@ func main() {
 			fatal("discovery table stopped", err)
 		}
 	}()
+	if err := table.WaitForSync(ctx); err != nil {
+		fatal("wait for initial app discovery", err)
+	}
 
 	store := keys.NewStore()
 	if os.Getenv("MCP2REST_DISABLE_AUTH") == "true" {
@@ -82,6 +85,11 @@ func main() {
 	if err != nil {
 		fatal("create secret writer", err)
 	}
+	created, err := writer.EnsureBootstrap(ctx, namespace, store)
+	if err != nil {
+		fatal("initialize bootstrap admin key", err)
+	}
+	logger.Info("bootstrap admin credential ready", "namespace", namespace, "secret", keys.BootstrapSecretName, "created", created)
 	creds, err := upstreamcreds.New(client, namespace)
 	if err != nil {
 		fatal("create upstream credential cache", err)
@@ -94,10 +102,6 @@ func main() {
 		fatal("create admin api", err)
 	}
 	admin.SetInternalBaseURL(internalBaseURL(serviceName, namespace, addr))
-	if _, _, err := admin.EnsureBootstrapAdminKey(os.Stderr); err != nil {
-		fatal("bootstrap admin key", err)
-	}
-
 	registry := prometheus.NewRegistry()
 	if err := registry.Register(collectors.NewGoCollector()); err != nil {
 		fatal("register go collector", err)
@@ -116,6 +120,7 @@ func main() {
 		store,
 		render.New(http.DefaultClient),
 		passthrough.New(http.DefaultClient),
+		passthrough.NewProxy(http.DefaultTransport, logger),
 		creds,
 		admin,
 		skillClient,
