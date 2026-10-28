@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
@@ -30,7 +31,7 @@ func TestRequireAdminAllowsEmptyKeyWhenAuthDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
-	api, err := New(client, table, store, writer, &stubCredentialReloader{})
+	api, err := New(client, table, store, testAgentKeys(t, writer, store), &stubCredentialReloader{})
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
@@ -78,7 +79,7 @@ func TestRegisterAppCreatesSecretAndIsIdempotent(t *testing.T) {
 		t.Fatalf("RegisterApp(first) created %d keys, want 1", len(result.CreatedKeys))
 	}
 
-	secretKeys, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
+	secretKeys, err := readAgentKeys(ctx, api, "hermes-alice", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys() error = %v", err)
 	}
@@ -94,7 +95,7 @@ func TestRegisterAppCreatesSecretAndIsIdempotent(t *testing.T) {
 		t.Fatalf("RegisterApp(second) created %d keys, want 0", len(second.CreatedKeys))
 	}
 
-	again, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
+	again, err := readAgentKeys(ctx, api, "hermes-alice", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys(second) error = %v", err)
 	}
@@ -130,7 +131,7 @@ func TestRegisterAppMintsKeyTierFromAuthorizedAgent(t *testing.T) {
 		t.Fatalf("RegisterApp() error = %v", err)
 	}
 
-	clusterAgentKeys, err := api.writer.ReadSecretKeys(ctx, "cluster-agent", "agents")
+	clusterAgentKeys, err := readAgentKeys(ctx, api, "cluster-agent", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys(cluster-agent) error = %v", err)
 	}
@@ -142,7 +143,7 @@ func TestRegisterAppMintsKeyTierFromAuthorizedAgent(t *testing.T) {
 		t.Fatalf("cluster-agent key record = %+v, ok=%t, want TierAdmin", record, ok)
 	}
 
-	hermesKeys, err := api.writer.ReadSecretKeys(ctx, "hermes-bob", "agents")
+	hermesKeys, err := readAgentKeys(ctx, api, "hermes-bob", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys(hermes-bob) error = %v", err)
 	}
@@ -256,7 +257,7 @@ func TestCreateRevokeRotateKeyUpdatesSecret(t *testing.T) {
 		t.Fatal("CreateKey() returned empty key")
 	}
 
-	keysBefore, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
+	keysBefore, err := readAgentKeys(ctx, api, "hermes-alice", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys(before) error = %v", err)
 	}
@@ -282,7 +283,7 @@ func TestCreateRevokeRotateKeyUpdatesSecret(t *testing.T) {
 		t.Fatal("rotated old key still present in store")
 	}
 
-	keysAfterRotate, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
+	keysAfterRotate, err := readAgentKeys(ctx, api, "hermes-alice", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys(after rotate) error = %v", err)
 	}
@@ -303,7 +304,7 @@ func TestCreateRevokeRotateKeyUpdatesSecret(t *testing.T) {
 	if _, ok := api.store.Lookup(rotated.Key); ok {
 		t.Fatal("revoked key still present in store")
 	}
-	keysAfterRevoke, err := api.writer.ReadSecretKeys(ctx, "hermes-alice", "agents")
+	keysAfterRevoke, err := readAgentKeys(ctx, api, "hermes-alice", "agents")
 	if err != nil {
 		t.Fatalf("ReadSecretKeys(after revoke) error = %v", err)
 	}
@@ -471,11 +472,41 @@ func newTestAPI(t *testing.T) *API {
 	if err != nil {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
-	api, err := New(client, table, store, writer, &stubCredentialReloader{})
+	api, err := New(client, table, store, testAgentKeys(t, writer, store), &stubCredentialReloader{})
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
 	return api
+}
+
+func testAgentKeys(t *testing.T, writer *keys.SecretWriter, store *keys.Store) *keys.AgentKeys {
+	t.Helper()
+	agents, err := keys.NewAgentKeys(writer, "mcp2rest", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agents.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return agents
+}
+
+func readAgentKeys(ctx context.Context, api *API, agent, namespace string) ([]string, error) {
+	secret, err := api.client.CoreV1().Secrets("mcp2rest").Get(ctx, keys.AgentSecretName(agent, namespace), metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	var document struct {
+		Keys []struct{ Key string }
+	}
+	if err := json.Unmarshal(secret.Data["keys.json"], &document); err != nil {
+		return nil, err
+	}
+	rawKeys := make([]string, 0, len(document.Keys))
+	for _, entry := range document.Keys {
+		rawKeys = append(rawKeys, entry.Key)
+	}
+	return rawKeys, nil
 }
 
 type stubCredentialReloader struct {

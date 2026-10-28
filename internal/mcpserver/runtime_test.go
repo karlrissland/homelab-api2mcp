@@ -83,7 +83,7 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
 	creds := mustCreds(t, client)
-	admin, err := adminapi.New(client, table, store, writer, creds)
+	admin, err := adminapi.New(client, table, store, newAgentKeys(t, writer, store), creds)
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
@@ -184,15 +184,12 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 
 	waitForDiscoveredApp(t, table, "demo")
 
-	rawKeys, err := writer.ReadSecretKeys(context.Background(), "hermes-alice", "agents")
+	agentKey, err := admin.GetKey(context.Background(), adminapi.GetKeyParams{AgentInstance: "hermes-alice", Namespace: "agents", Tier: "user"})
 	if err != nil {
-		t.Fatalf("ReadSecretKeys() error = %v", err)
-	}
-	if len(rawKeys) != 1 {
-		t.Fatalf("ReadSecretKeys() = %#v, want exactly one user key", rawKeys)
+		t.Fatalf("GetKey() error = %v", err)
 	}
 
-	appSession := connectHTTPClient(t, server.URL+"/demo/mcp", rawKeys[0])
+	appSession := connectHTTPClient(t, server.URL+"/demo/mcp", agentKey.Key)
 	defer func() { _ = appSession.Close() }()
 
 	if got := appSession.InitializeResult().Instructions; !strings.Contains(got, `"demo"`) {
@@ -259,6 +256,50 @@ func TestRuntimeHandlerRegisterAppAndRenderedCallRoundTrip(t *testing.T) {
 	if decodedSkill.Skill.Spec.Content != "# mcp2rest" {
 		t.Fatalf("get_skill structured result = %+v, want full skill content", decodedSkill)
 	}
+
+	restartedStore := keys.NewStore()
+	if created, err := writer.EnsureBootstrap(ctx, "mcp2rest", restartedStore); err != nil || created {
+		t.Fatalf("restore bootstrap credential: created = %t, error = %v", created, err)
+	}
+	restartedAdmin, err := adminapi.New(client, table, restartedStore, newAgentKeys(t, writer, restartedStore), creds)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedHandler, err := NewRuntimeHandler(table, restartedStore, render.New(upstream.Client()), passthrough.New(upstream.Client()), passthrough.NewProxy(upstream.Client().Transport, logger), creds, restartedAdmin, skillClient, metrics, logger, metricsHandler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restartedServer := httptest.NewServer(restartedHandler)
+	defer restartedServer.Close()
+	restartedManagement := connectHTTPClient(t, restartedServer.URL+managementPath, adminKey)
+	defer func() { _ = restartedManagement.Close() }()
+	fetched, err := restartedManagement.CallTool(ctx, &mcp.CallToolParams{
+		Name: "get_key", Arguments: map[string]any{"agentInstance": "hermes-alice", "namespace": "agents", "tier": "user"},
+	})
+	if err != nil || fetched.IsError {
+		t.Fatalf("get_key after restart: error = %v", err)
+	}
+	if decodeStructured[adminapi.GetKeyResult](t, fetched.StructuredContent).Key != agentKey.Key {
+		t.Fatal("management key retrieval changed the agent credential after restart")
+	}
+	restartedSession := connectHTTPClient(t, restartedServer.URL+"/demo/mcp", agentKey.Key)
+	defer func() { _ = restartedSession.Close() }()
+	afterRestart, err := restartedSession.CallTool(ctx, &mcp.CallToolParams{Name: "list_repos", Arguments: map[string]any{"page": 2}})
+	if err != nil || afterRestart.IsError || strings.TrimSpace(joinedText(afterRestart)) != "octocat/hello-world" {
+		t.Fatalf("original agent key failed after restart: error = %v", err)
+	}
+}
+
+func newAgentKeys(t *testing.T, writer *keys.SecretWriter, store *keys.Store) *keys.AgentKeys {
+	t.Helper()
+	agents, err := keys.NewAgentKeys(writer, "mcp2rest", store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := agents.Restore(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return agents
 }
 
 type authTransport struct {

@@ -58,8 +58,8 @@ The provisioning client should:
 4. Confirm an authenticated `list_apps` succeeds, then make provisioning
    calls such as `register_app` and `reload_cache`, checking their results.
    Do not scrape pod logs, generate a separate gateway key, or pass this
-   full-admin credential to ordinary agent instances. Their keys retain
-   the existing per-agent Secret delivery flow.
+   full-admin credential to ordinary agent instances. Request their own
+   keys through the management API and deliver them as described below.
 
 Retain this Secret across pod restarts and upgrades; it has no pod or
 Deployment owner reference. Protect it as a cluster-admin credential.
@@ -68,16 +68,102 @@ delete this dedicated Secret using operator credentials, restart the
 gateway, and have provisioners reread the new key after readiness.
 Existing processes do not watch this Secret; `reload_cache` only reloads
 upstream credentials. Per-agent `get_key`/`rotate_key`/`revoke_key` tools
-do not manage the bootstrap Secret. Automatic rotation and ordinary
-agent-key restoration remain deferred; ordinary agent verification
-records are still lost on restart. Sharing the bootstrap key does not
-make those records multi-replica-safe.
+do not manage the bootstrap Secret. Automatic rotation remains deferred.
+Agent keys have their own persistent records as described below; neither
+bootstrap nor agent-key persistence provides live multi-replica cache
+coordination.
 
 When upgrading from the old mint-and-print startup, hlctl must switch to
 reading this Secret instead of reusing a log-delivered key. Install RBAC
 first. Provisioning must authenticate successfully before an operator
 removes any temporary `MCP2REST_DISABLE_AUTH=true` bypass; this change
 does not alter a live deployment or that flag.
+
+## Persistent agent keys and hlctl handoff
+
+The gateway generates, stores, and validates agent keys. hlctl authenticates
+to the management `/mcp` endpoint using the bootstrap admin key, requests
+an agent key, and delivers **only that agent's key** to its harness.
+There is no new token endpoint: the existing management tools are used.
+
+| Tool | Arguments | Behavior |
+|---|---|---|
+| `create_key` | `agentInstance`, `namespace`, `tier` | Creates an additional key and returns it in `key`. |
+| `get_key` | Same | Retrieves an existing key for that identity and tier, including after gateway restart. Reports an error if none exists. |
+| `rotate_key` | Same | Persists a replacement, invalidates all prior keys of that tier, and returns `key` and `revoked`. |
+| `revoke_key` | `namespace` plus either `rawKey` or `agentInstance`/`tier` | Persists revocation before changing the verification index. |
+
+`namespace` identifies the **agent's owning namespace**, not the storage
+location. It and `agentInstance` form the stable identity; identically
+named agents in different namespaces have distinct keys. `tier` is `user`
+or `admin`. The input fields and existing `key` response remain unchanged.
+`list_keys` and `register_app.createdKeys` also report the agent namespace.
+Repeated `create_key` calls create additional credentials; use `get_key`
+for retrieval/reuse, not repeated minting. `register_app.authorizedAgents`
+ensures/reuses the requested identity/tier key without rotating it.
+
+### Authoritative storage and startup
+
+All authoritative agent Secrets live in `MCP2REST_NAMESPACE` (default
+`mcp2rest`), never in the agent's namespace. Each has:
+
+- Type `Opaque`, label `mcp2rest.homelab.dev/agent-keys=true`, and no
+  pod/Deployment owner reference.
+- A deterministic name, `mcp2rest-agent-` plus the first 16 SHA-256 digest
+  bytes of `namespace + NUL + agentInstance`, represented as lowercase hex.
+- A `keys.json` entry containing a version-1 object with `agentInstance`,
+  `namespace`, and `keys`: an array of `{key, tier, createdAt}` records.
+  Multiple keys/tiers can coexist for an agent. An empty array records
+  that all its keys have been revoked; the Secret is retained.
+
+Before accepting HTTP requests, the gateway validates these Secrets and
+atomically restores the verification index, including identity, tier, and
+original creation time. The bootstrap key is preserved separately. The
+same raw agent key authenticates after restart; re-registering an app or
+retrieving the key does not replace it.
+
+Invalid JSON/version/identity/key/tier/timestamp, duplicate credentials,
+unexpected Secret ownership/type, or failed startup Secret reads stop
+startup without partially loading credentials or printing key material.
+Key creation, rotation, and revocation commit to Kubernetes before the
+live verification index changes. Failed writes leave the previous
+verification state intact and return an error. Kubernetes update
+conflicts are surfaced for the caller to retry rather than overwriting
+concurrent changes.
+
+Apply [`manifests/rbac/agent-keys-role.yaml`](manifests/rbac/agent-keys-role.yaml)
+**before upgrading the gateway**. Render its namespace and ServiceAccount
+fields to match the deployment. The gateway needs `get/list/create/update`
+on Secrets in its own namespace; no agent-namespace Secret permissions or
+delete/watch verbs are needed. Kubernetes RBAC cannot restrict these
+dynamic names or startup listing by label. The old cross-namespace
+`keys-secrets-clusterrole.yaml` delivery bindings are no longer required
+by the new gateway; assess/remove them during the downstream RBAC update.
+
+hlctl does not need to read these agent Secrets directly: it uses the
+admin-authenticated management tools, then installs the returned key as
+the harness's bearer credential or writes a delivery Secret in the
+agent's namespace. Kubernetes pods cannot directly mount another
+namespace's Secret. Delivery copies are not authoritative and do not
+grant the gateway access to those namespaces.
+
+### Upgrade and operational limits
+
+Legacy `<agent-instance>-mcp2rest-keys` Secrets containing only a raw
+`keys.json` array cannot be safely restored because they lack tier and
+creation metadata. They are **not automatically imported or assigned a
+default tier**. On the first upgrade, hlctl must issue/ensure keys through
+the new gateway and re-deliver them to existing agents; old raw-only
+Secrets are not the source of truth. Keys issued through the new storage
+remain stable on subsequent restarts.
+
+Use the management API for rotation/revocation. There is no agent Secret
+watcher or automatic rotation, and multiple active gateway replicas can
+have stale verification caches until separately coordinated. This
+change supports restart-safe **single-active-gateway** operation, not
+general multi-replica consistency. Publication and cluster rollout are
+separate steps; no live credentials or deployments are changed by local
+implementation.
 
 ## Native MCP endpoint passthrough
 

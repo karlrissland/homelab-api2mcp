@@ -11,10 +11,21 @@ this Secret using its Kubernetes credentials and authenticates management
 MCP calls with the **full-admin** key; a registration-only tier is not
 implemented. No agent is automatically given this credential.
 
-See README's bootstrap provisioning section and
+Agent-key persistence now also supersedes the earlier direct-to-agent
+Secret delivery and raw-array-only design in §3.3/Phase 5 and the
+`get_key` resolution description below. Authoritative namespace-qualified
+agent Secrets live in the gateway namespace, contain full identity/tier/
+creation metadata, and are restored before serving requests. hlctl obtains
+keys through the existing management API and owns harness delivery.
+Legacy raw-only agent Secrets require one-time reissuance/re-delivery;
+their missing authorization metadata is never inferred.
+
+See README's bootstrap and persistent-agent-key sections and
 `manifests/rbac/bootstrap-role.yaml` for the current RBAC, readiness,
-retrieval, migration, and manual regeneration contract. Only the bootstrap
-verification record is restored; ordinary agent keys remain in-memory.
+retrieval, migration, and manual regeneration contract, plus
+`manifests/rbac/agent-keys-role.yaml` for the agent repository's own-namespace
+permissions. Bootstrap and agent verification records are restored; live
+multi-replica cache coordination remains outside this implementation.
 The dated status and original decisions below describe earlier rollout
 state and do not imply this change has been deployed downstream.
 

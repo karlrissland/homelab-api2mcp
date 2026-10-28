@@ -165,6 +165,7 @@ func TestStoreImport(t *testing.T) {
 	for _, conflict := range []Record{
 		{AgentInstance: "another-agent", Tier: record.Tier, CreatedAt: record.CreatedAt},
 		{AgentInstance: record.AgentInstance, Tier: manifest.TierUser, CreatedAt: record.CreatedAt},
+		{AgentInstance: record.AgentInstance, Namespace: "other", Tier: record.Tier, CreatedAt: record.CreatedAt},
 	} {
 		if err := store.Import(key, conflict); err == nil {
 			t.Fatal("Import(conflicting identity/tier) succeeded")

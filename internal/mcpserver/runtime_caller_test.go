@@ -87,7 +87,7 @@ func TestRuntimeHandlerCallerUsernameImpersonationRoundTrip(t *testing.T) {
 		t.Fatalf("keys.NewSecretWriter() error = %v", err)
 	}
 	creds := mustCreds(t, client)
-	admin, err := adminapi.New(client, table, store, writer, creds)
+	admin, err := adminapi.New(client, table, store, newAgentKeys(t, writer, store), creds)
 	if err != nil {
 		t.Fatalf("adminapi.New() error = %v", err)
 	}
@@ -148,15 +148,12 @@ func TestRuntimeHandlerCallerUsernameImpersonationRoundTrip(t *testing.T) {
 
 	waitForDiscoveredApp(t, table, fixtureApp.Name)
 
-	rawKeys, err := writer.ReadSecretKeys(context.Background(), "hermes-alice", "agents")
+	agentKey, err := admin.GetKey(context.Background(), adminapi.GetKeyParams{AgentInstance: "hermes-alice", Namespace: "agents", Tier: "user"})
 	if err != nil {
-		t.Fatalf("ReadSecretKeys() error = %v", err)
-	}
-	if len(rawKeys) != 1 {
-		t.Fatalf("ReadSecretKeys() = %#v, want exactly one user key", rawKeys)
+		t.Fatalf("GetKey() error = %v", err)
 	}
 
-	appSession := connectHTTPClient(t, server.URL+"/"+fixtureApp.Name+"/mcp", rawKeys[0])
+	appSession := connectHTTPClient(t, server.URL+"/"+fixtureApp.Name+"/mcp", agentKey.Key)
 	defer func() { _ = appSession.Close() }()
 
 	callAlice, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{

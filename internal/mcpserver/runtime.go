@@ -177,8 +177,9 @@ Workflow for onboarding a new app's tools into an agent harness:
     exist and their declared tools/schemas.
  2. Configure your MCP client/harness with a NEW server entry pointing at
     https://mcp2rest.<dns-zone>/{app-name}/mcp, authenticated with a
-    per-agent-instance key (delivered via that agent's own
-    <agent-instance>-mcp2rest-keys Kubernetes Secret, keys.json field).
+    per-agent-instance key issued by mcp2rest and delivered by hlctl.
+    Authoritative keys live in the gateway namespace; hlctl configures
+    the harness's bearer header or a Secret in the agent's namespace.
  3. Reconnect/add that server in your harness -- get_manifest alone does
     not register or add anything automatically; there is no MCP
     self-registration mechanism.`

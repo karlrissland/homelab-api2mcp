@@ -21,6 +21,7 @@ var ErrKeyNotFound = errors.New("key not found")
 // Record describes one minted key without retaining the raw key material.
 type Record struct {
 	AgentInstance string
+	Namespace     string
 	Tier          manifest.Tier
 	CreatedAt     time.Time
 }
@@ -81,6 +82,23 @@ func (s *Store) Mint(agentInstance string, tier manifest.Tier) (string, error) {
 // Import restores verification state for a persisted key without retaining its
 // raw value. Reimporting the same key and identity preserves its existing record.
 func (s *Store) Import(key string, record Record) error {
+	if err := s.validate(key, record); err != nil {
+		return err
+	}
+	digest := digestKey(key)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.records[digest]; ok {
+		if existing.AgentInstance != record.AgentInstance || existing.Namespace != record.Namespace || existing.Tier != record.Tier {
+			return fmt.Errorf("import key: key is already registered for a different identity or tier")
+		}
+		return nil
+	}
+	s.records[digest] = record
+	return nil
+}
+
+func (s *Store) validate(key string, record Record) error {
 	if record.AgentInstance == "" {
 		return fmt.Errorf("import key: agent instance is required")
 	}
@@ -94,16 +112,41 @@ func (s *Store) Import(key string, record Record) error {
 	if err != nil || len(decoded) != keyBytes || s.encoding.EncodeToString(decoded) != key {
 		return fmt.Errorf("import key: expected a canonical base64url-encoded 32-byte key")
 	}
-	digest := digestKey(key)
+	return nil
+}
+
+// replaceAgents atomically reconciles one agent, or all persisted agents when
+// namespace is empty, while leaving bootstrap and ephemeral records alone.
+func (s *Store) replaceAgents(namespace, agent string, records map[[sha256.Size]byte]Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.records[digest]; ok {
-		if existing.AgentInstance != record.AgentInstance || existing.Tier != record.Tier {
-			return fmt.Errorf("import key: key is already registered for a different identity or tier")
-		}
-		return nil
+	if err := s.checkRecordsLocked(records); err != nil {
+		return err
 	}
-	s.records[digest] = record
+	for digest, record := range s.records {
+		if record.Namespace != "" && (namespace == "" || (record.Namespace == namespace && record.AgentInstance == agent)) {
+			delete(s.records, digest)
+		}
+	}
+	for digest, record := range records {
+		s.records[digest] = record
+	}
+	return nil
+}
+
+func (s *Store) checkRecords(records map[[sha256.Size]byte]Record) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.checkRecordsLocked(records)
+}
+
+func (s *Store) checkRecordsLocked(records map[[sha256.Size]byte]Record) error {
+	for digest, record := range records {
+		if existing, ok := s.records[digest]; ok &&
+			(existing.Namespace != record.Namespace || existing.AgentInstance != record.AgentInstance || existing.Tier != record.Tier) {
+			return fmt.Errorf("restore agent keys: key conflicts with an existing identity or tier")
+		}
+	}
 	return nil
 }
 
@@ -142,14 +185,19 @@ func (s *Store) Lookup(key string) (Record, bool) {
 		}, true
 	}
 
+	return s.LookupStored(key)
+}
+
+// LookupStored returns real verification metadata, ignoring the optional
+// authentication bypass. Management operations must not use a synthetic caller
+// identity when resolving persisted credentials.
+func (s *Store) LookupStored(key string) (Record, bool) {
 	if key == "" {
 		return Record{}, false
 	}
-
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	record, ok := s.records[digestKey(key)]
-	s.mu.RUnlock()
-
 	return record, ok
 }
 

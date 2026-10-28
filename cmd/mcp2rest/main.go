@@ -90,6 +90,13 @@ func main() {
 		fatal("initialize bootstrap admin key", err)
 	}
 	logger.Info("bootstrap admin credential ready", "namespace", namespace, "secret", keys.BootstrapSecretName, "created", created)
+	agents, err := keys.NewAgentKeys(writer, namespace, store)
+	if err != nil {
+		fatal("create agent key repository", err)
+	}
+	if err := agents.Restore(ctx); err != nil {
+		fatal("restore persisted agent keys", err)
+	}
 	creds, err := upstreamcreds.New(client, namespace)
 	if err != nil {
 		fatal("create upstream credential cache", err)
@@ -97,7 +104,7 @@ func main() {
 	if err := creds.Reload(ctx, table.List()); err != nil {
 		fatal("initial upstream credential reload", err)
 	}
-	admin, err := adminapi.New(client, table, store, writer, creds)
+	admin, err := adminapi.New(client, table, store, agents, creds)
 	if err != nil {
 		fatal("create admin api", err)
 	}

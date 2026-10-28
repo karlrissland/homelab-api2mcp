@@ -1,0 +1,27 @@
+# Apply before starting this version. All agent-key storage is in the gateway
+# namespace, regardless of the owning agent's namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mcp2rest-agent-keys
+  namespace: mcp2rest
+rules:
+  # Dynamic Secret names and startup discovery require namespace-wide rights.
+  # Kubernetes RBAC cannot limit these grants by label or name prefix.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mcp2rest-agent-keys
+  namespace: mcp2rest
+subjects:
+  - kind: ServiceAccount
+    name: mcp2rest
+    namespace: mcp2rest
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: mcp2rest-agent-keys

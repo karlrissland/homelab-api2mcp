@@ -56,6 +56,12 @@ progresses. Do not reorder phases — dependencies are listed in `plan.md`.
 
 ## Phase 5 — Key issuance + per-instance Secret delivery
 
+Current contract: authoritative agent Secrets and identity/tier/creation
+metadata are persisted in the gateway namespace and restored before HTTP
+startup. hlctl retrieves keys through `create_key`/`get_key` and owns harness
+delivery. This supersedes the historical direct-delivery tasks below; see
+README for namespace-scoped RBAC and the required one-time legacy reissue.
+
 | Status | Task |
 |---|---|
 | done | `internal/keys`: mint/store/revoke |

@@ -100,7 +100,7 @@ func TestRuntimeNativeEndpointAuthenticationDiscoveryAndRotation(t *testing.T) {
 		t.Fatal(err)
 	}
 	creds := mustCreds(t, client)
-	admin, err := adminapi.New(client, table, store, writer, creds)
+	admin, err := adminapi.New(client, table, store, newAgentKeys(t, writer, store), creds)
 	if err != nil {
 		t.Fatal(err)
 	}

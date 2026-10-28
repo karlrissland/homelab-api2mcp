@@ -13,8 +13,9 @@ import (
 
 const secretDataKey = "keys.json"
 
-// SecretWriter writes per-instance mcp2rest key material into Kubernetes
-// Secrets using an injected client-go interface for testability.
+// SecretWriter supplies Kubernetes access for bootstrap and agent credentials.
+// Its raw-key helpers retain the legacy delivery format; AgentKeys owns the
+// authoritative records and their authorization metadata.
 type SecretWriter struct {
 	client kubernetes.Interface
 }

@@ -3,7 +3,6 @@ package adminapi
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,7 +29,7 @@ type API struct {
 	client          kubernetes.Interface
 	table           *discovery.Table
 	store           *keys.Store
-	writer          *keys.SecretWriter
+	agents          *keys.AgentKeys
 	creds           CredentialReloader
 	internalBaseURL string
 }
@@ -45,7 +44,7 @@ type API struct {
 // compatibility with callers sent before this field existed.
 type AuthorizedAgent struct {
 	AgentInstance string        `json:"agentInstance" jsonschema:"Agent instance name"`
-	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the agent Secret"`
+	Namespace     string        `json:"namespace" jsonschema:"Agent namespace identifying the owner; authoritative keys are stored in the gateway namespace"`
 	Tier          manifest.Tier `json:"tier,omitempty" jsonschema:"Tier the agent instance itself holds: user or admin; defaults to user if omitted"`
 }
 
@@ -104,13 +103,14 @@ type GetManifestParams struct {
 // CreateKeyParams mints a key and writes the owning Secret.
 type CreateKeyParams struct {
 	AgentInstance string        `json:"agentInstance" jsonschema:"Agent instance name"`
-	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the key Secret"`
+	Namespace     string        `json:"namespace" jsonschema:"Agent namespace identifying the owner, not the gateway storage namespace"`
 	Tier          manifest.Tier `json:"tier" jsonschema:"Key tier: user or admin"`
 }
 
 // KeyRecord is the management-tool view of one key.
 type KeyRecord struct {
 	AgentInstance string        `json:"agentInstance"`
+	Namespace     string        `json:"namespace,omitempty"`
 	Tier          manifest.Tier `json:"tier"`
 	CreatedAt     string        `json:"createdAt"`
 }
@@ -126,7 +126,7 @@ type CreateKeyResult struct {
 // GetKeyParams requests the current raw key for one agent instance+tier.
 type GetKeyParams struct {
 	AgentInstance string        `json:"agentInstance" jsonschema:"Agent instance name"`
-	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the key Secret"`
+	Namespace     string        `json:"namespace" jsonschema:"Agent namespace identifying the owner, not the gateway storage namespace"`
 	Tier          manifest.Tier `json:"tier" jsonschema:"Tier to fetch: user or admin"`
 }
 
@@ -151,7 +151,7 @@ type GetKeyResult struct {
 // RevokeKeyParams revokes either one raw key or every key matching an
 // agent+tier in the target Secret.
 type RevokeKeyParams struct {
-	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the key Secret"`
+	Namespace     string        `json:"namespace" jsonschema:"Agent namespace identifying the owner, not the gateway storage namespace"`
 	AgentInstance string        `json:"agentInstance,omitempty" jsonschema:"Agent instance name (required unless rawKey is provided)"`
 	Tier          manifest.Tier `json:"tier,omitempty" jsonschema:"Tier to revoke when revoking by agentInstance+tier"`
 	RawKey        string        `json:"rawKey,omitempty" jsonschema:"Raw key to revoke directly"`
@@ -167,7 +167,7 @@ type RevokeKeyResult struct {
 // RotateKeyParams rotates every key for one agent+tier.
 type RotateKeyParams struct {
 	AgentInstance string        `json:"agentInstance" jsonschema:"Agent instance name"`
-	Namespace     string        `json:"namespace" jsonschema:"Namespace holding the key Secret"`
+	Namespace     string        `json:"namespace" jsonschema:"Agent namespace identifying the owner, not the gateway storage namespace"`
 	Tier          manifest.Tier `json:"tier" jsonschema:"Tier to rotate"`
 }
 
@@ -186,7 +186,7 @@ type ReloadCacheResult struct {
 }
 
 // New constructs the management API.
-func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store, writer *keys.SecretWriter, creds CredentialReloader) (*API, error) {
+func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store, agents *keys.AgentKeys, creds CredentialReloader) (*API, error) {
 	switch {
 	case client == nil:
 		return nil, fmt.Errorf("new admin api: kubernetes client is required")
@@ -194,12 +194,12 @@ func New(client kubernetes.Interface, table *discovery.Table, store *keys.Store,
 		return nil, fmt.Errorf("new admin api: discovery table is required")
 	case store == nil:
 		return nil, fmt.Errorf("new admin api: key store is required")
-	case writer == nil:
-		return nil, fmt.Errorf("new admin api: secret writer is required")
+	case agents == nil:
+		return nil, fmt.Errorf("new admin api: agent key repository is required")
 	case creds == nil:
 		return nil, fmt.Errorf("new admin api: credential reloader is required")
 	default:
-		return &API{client: client, table: table, store: store, writer: writer, creds: creds}, nil
+		return &API{client: client, table: table, store: store, agents: agents, creds: creds}, nil
 	}
 }
 
@@ -307,7 +307,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 			"(e.g. \"/metube/mcp\"); the full external URL is https://mcp2rest.<dns-zone>{mcpEndpointPath}, " +
 			"reserved for callers genuinely outside the cluster. A human operator must add the chosen URL " +
 			"as a NEW, separate MCP client/server entry, authenticated with that agent instance's own key " +
-			"from its <agent-instance>-mcp2rest-keys Secret -- there is no tool call, here or anywhere, " +
+			"from hlctl's agent-specific key handoff -- there is no tool call, here or anywhere, " +
 			"that adds or connects it for you.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetManifestParams) (*mcp.CallToolResult, manifest.App, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
@@ -319,7 +319,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "create_key",
-		Description: "Mint a user/admin key for one agent instance and update that instance's Secret.",
+		Description: "Mint and return a user/admin key for one namespace-qualified agent. Persist it in the gateway namespace; the caller delivers it to the agent.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params CreateKeyParams) (*mcp.CallToolResult, CreateKeyResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, CreateKeyResult{}, err
@@ -330,7 +330,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_keys",
-		Description: "List known key records. Raw key material is never returned after mint time.",
+		Description: "List known key identities, namespaces, tiers, and creation times without raw key material.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListKeysResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ListKeysResult{}, err
@@ -340,7 +340,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_key",
-		Description: "Fetch the current raw key for one agent instance+tier. Admin tier required. " +
+		Description: "Fetch a persisted raw key for one agent namespace+instance+tier, including after gateway restart. Admin tier required. " +
 			"Narrow exception to mcp2rest's normal key-delivery model, for callers (e.g. hlctl) that must " +
 			"bake a literal credential value into another system's own static config at deploy time.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetKeyParams) (*mcp.CallToolResult, GetKeyResult, error) {
@@ -419,12 +419,12 @@ func (a *API) RegisterApp(ctx context.Context, params RegisterAppParams) (Regist
 		if !tier.Valid() {
 			return RegisterAppResult{}, fmt.Errorf("register app %q: agent %s/%s: invalid tier %q", app.Name, agent.Namespace, agent.AgentInstance, agent.Tier)
 		}
-		key, created, err := a.ensureTierKey(ctx, agent.AgentInstance, agent.Namespace, tier)
+		key, created, err := a.agents.Ensure(ctx, agent.AgentInstance, agent.Namespace, tier)
 		if err != nil {
 			return RegisterAppResult{}, fmt.Errorf("register app %q: ensure key for %s/%s: %w", app.Name, agent.Namespace, agent.AgentInstance, err)
 		}
 		if created {
-			record, _ := a.store.Lookup(key)
+			record, _ := a.store.LookupStored(key)
 			createdKeys = append(createdKeys, formatKeyRecord(record))
 		}
 	}
@@ -523,7 +523,7 @@ func (a *API) CreateKey(ctx context.Context, params CreateKeyParams) (CreateKeyR
 		return CreateKeyResult{}, err
 	}
 
-	key, err := a.appendTierKey(ctx, params.AgentInstance, params.Namespace, params.Tier)
+	key, err := a.agents.Create(ctx, params.AgentInstance, params.Namespace, params.Tier)
 	if err != nil {
 		return CreateKeyResult{}, fmt.Errorf("create key for %s/%s: %w", params.Namespace, params.AgentInstance, err)
 	}
@@ -546,33 +546,17 @@ func (a *API) ListKeys(context.Context) []KeyRecord {
 	return out
 }
 
-// GetKey returns the current raw key for one agent instance+tier, resolved
-// by cross-referencing the Secret's raw key array against mcp2rest's own
-// in-memory key store (the same resolution ensureTierKey already performs
-// internally) rather than relying on Secret array ordering or shape.
+// GetKey returns a persisted key for one namespace-qualified agent and tier.
 func (a *API) GetKey(ctx context.Context, params GetKeyParams) (GetKeyResult, error) {
 	if err := validateAgentTierParams(params.AgentInstance, params.Namespace, params.Tier, "get key"); err != nil {
 		return GetKeyResult{}, err
 	}
 
-	rawKeys, err := a.writer.ReadSecretKeys(ctx, params.AgentInstance, params.Namespace)
+	key, err := a.agents.Get(ctx, params.AgentInstance, params.Namespace, params.Tier)
 	if err != nil {
-		return GetKeyResult{}, fmt.Errorf("get key for %s/%s: read secret keys: %w", params.Namespace, params.AgentInstance, err)
+		return GetKeyResult{}, fmt.Errorf("get key for %s/%s: %w", params.Namespace, params.AgentInstance, err)
 	}
-
-	for _, rawKey := range rawKeys {
-		record, ok := a.store.Lookup(rawKey)
-		if ok && record.AgentInstance == params.AgentInstance && record.Tier == params.Tier {
-			return GetKeyResult{
-				AgentInstance: params.AgentInstance,
-				Namespace:     params.Namespace,
-				Tier:          params.Tier,
-				Key:           rawKey,
-			}, nil
-		}
-	}
-
-	return GetKeyResult{}, fmt.Errorf("get key for %s/%s: no %s-tier key found", params.Namespace, params.AgentInstance, params.Tier)
+	return GetKeyResult{AgentInstance: params.AgentInstance, Namespace: params.Namespace, Tier: params.Tier, Key: key}, nil
 }
 
 // RevokeKey removes one or more keys and updates the owning Secret.
@@ -587,48 +571,9 @@ func (a *API) RevokeKey(ctx context.Context, params RevokeKeyParams) (RevokeKeyR
 		return RevokeKeyResult{}, fmt.Errorf("revoke key for agent instance %q: invalid tier %q", params.AgentInstance, params.Tier)
 	}
 
-	agentInstance := params.AgentInstance
-	if params.RawKey != "" {
-		record, ok := a.store.Lookup(params.RawKey)
-		if !ok {
-			return RevokeKeyResult{}, fmt.Errorf("revoke key: raw key not found")
-		}
-		agentInstance = record.AgentInstance
-	}
-
-	rawKeys, err := a.writer.ReadSecretKeys(ctx, agentInstance, params.Namespace)
+	agentInstance, revoked, err := a.agents.Revoke(ctx, params.AgentInstance, params.Namespace, params.Tier, params.RawKey)
 	if err != nil {
-		return RevokeKeyResult{}, fmt.Errorf("revoke key for %s/%s: read secret keys: %w", params.Namespace, agentInstance, err)
-	}
-
-	kept := make([]string, 0, len(rawKeys))
-	revoked := 0
-	for _, rawKey := range rawKeys {
-		record, ok := a.store.Lookup(rawKey)
-		if !ok {
-			kept = append(kept, rawKey)
-			continue
-		}
-		match := false
-		if params.RawKey != "" {
-			match = rawKey == params.RawKey
-		} else {
-			match = record.AgentInstance == agentInstance && record.Tier == params.Tier
-		}
-		if !match {
-			kept = append(kept, rawKey)
-			continue
-		}
-		if err := a.store.Revoke(rawKey); err != nil {
-			return RevokeKeyResult{}, fmt.Errorf("revoke key for %s/%s: revoke raw key: %w", params.Namespace, agentInstance, err)
-		}
-		revoked++
-	}
-	if revoked == 0 {
-		return RevokeKeyResult{}, fmt.Errorf("revoke key for %s/%s: no matching keys found", params.Namespace, agentInstance)
-	}
-	if err := a.writeSecretKeys(ctx, agentInstance, params.Namespace, kept); err != nil {
-		return RevokeKeyResult{}, fmt.Errorf("revoke key for %s/%s: update secret: %w", params.Namespace, agentInstance, err)
+		return RevokeKeyResult{}, fmt.Errorf("revoke key: %w", err)
 	}
 
 	return RevokeKeyResult{
@@ -645,36 +590,9 @@ func (a *API) RotateKey(ctx context.Context, params RotateKeyParams) (RotateKeyR
 		return RotateKeyResult{}, err
 	}
 
-	rawKeys, err := a.writer.ReadSecretKeys(ctx, params.AgentInstance, params.Namespace)
+	key, revoked, err := a.agents.Rotate(ctx, params.AgentInstance, params.Namespace, params.Tier)
 	if err != nil {
-		return RotateKeyResult{}, fmt.Errorf("rotate key for %s/%s: read secret keys: %w", params.Namespace, params.AgentInstance, err)
-	}
-
-	kept := make([]string, 0, len(rawKeys)+1)
-	revoked := 0
-	for _, rawKey := range rawKeys {
-		record, ok := a.store.Lookup(rawKey)
-		if !ok {
-			kept = append(kept, rawKey)
-			continue
-		}
-		if record.AgentInstance == params.AgentInstance && record.Tier == params.Tier {
-			if err := a.store.Revoke(rawKey); err != nil {
-				return RotateKeyResult{}, fmt.Errorf("rotate key for %s/%s: revoke raw key: %w", params.Namespace, params.AgentInstance, err)
-			}
-			revoked++
-			continue
-		}
-		kept = append(kept, rawKey)
-	}
-
-	key, err := a.store.Mint(params.AgentInstance, params.Tier)
-	if err != nil {
-		return RotateKeyResult{}, fmt.Errorf("rotate key for %s/%s: mint replacement key: %w", params.Namespace, params.AgentInstance, err)
-	}
-	kept = append(kept, key)
-	if err := a.writeSecretKeys(ctx, params.AgentInstance, params.Namespace, kept); err != nil {
-		return RotateKeyResult{}, fmt.Errorf("rotate key for %s/%s: update secret: %w", params.Namespace, params.AgentInstance, err)
+		return RotateKeyResult{}, fmt.Errorf("rotate key for %s/%s: %w", params.Namespace, params.AgentInstance, err)
 	}
 
 	return RotateKeyResult{
@@ -705,49 +623,6 @@ func (a *API) requireAdmin(apiKey string) error {
 	return nil
 }
 
-func (a *API) ensureTierKey(ctx context.Context, agentInstance, namespace string, tier manifest.Tier) (string, bool, error) {
-	if err := validateAgentTierParams(agentInstance, namespace, tier, "ensure key"); err != nil {
-		return "", false, err
-	}
-
-	rawKeys, err := a.writer.ReadSecretKeys(ctx, agentInstance, namespace)
-	if err != nil {
-		return "", false, fmt.Errorf("read existing secret keys: %w", err)
-	}
-	for _, rawKey := range rawKeys {
-		record, ok := a.store.Lookup(rawKey)
-		if ok && record.AgentInstance == agentInstance && record.Tier == tier {
-			return rawKey, false, nil
-		}
-	}
-
-	key, err := a.store.Mint(agentInstance, tier)
-	if err != nil {
-		return "", false, fmt.Errorf("mint key: %w", err)
-	}
-	rawKeys = append(rawKeys, key)
-	if err := a.writer.UpsertSecret(ctx, agentInstance, namespace, rawKeys); err != nil {
-		return "", false, fmt.Errorf("write secret: %w", err)
-	}
-	return key, true, nil
-}
-
-func (a *API) appendTierKey(ctx context.Context, agentInstance, namespace string, tier manifest.Tier) (string, error) {
-	rawKeys, err := a.writer.ReadSecretKeys(ctx, agentInstance, namespace)
-	if err != nil {
-		return "", fmt.Errorf("read existing secret keys: %w", err)
-	}
-	key, err := a.store.Mint(agentInstance, tier)
-	if err != nil {
-		return "", fmt.Errorf("mint key: %w", err)
-	}
-	rawKeys = append(rawKeys, key)
-	if err := a.writer.UpsertSecret(ctx, agentInstance, namespace, rawKeys); err != nil {
-		return "", fmt.Errorf("write secret: %w", err)
-	}
-	return key, nil
-}
-
 func (a *API) upsertConfigMap(ctx context.Context, cm *corev1.ConfigMap) error {
 	configMaps := a.client.CoreV1().ConfigMaps(cm.Namespace)
 	existing, err := configMaps.Get(ctx, cm.Name, metav1.GetOptions{})
@@ -765,14 +640,6 @@ func (a *API) upsertConfigMap(ctx context.Context, cm *corev1.ConfigMap) error {
 	return err
 }
 
-func (a *API) writeSecretKeys(ctx context.Context, agentInstance, namespace string, rawKeys []string) error {
-	if len(rawKeys) == 0 {
-		return a.writer.DeleteSecret(ctx, agentInstance, namespace)
-	}
-	slices.Sort(rawKeys)
-	return a.writer.UpsertSecret(ctx, agentInstance, namespace, rawKeys)
-}
-
 func defaultConfigMapName(appName string) string {
 	return fmt.Sprintf("%s-mcp2rest", appName)
 }
@@ -780,6 +647,7 @@ func defaultConfigMapName(appName string) string {
 func formatKeyRecord(record keys.Record) KeyRecord {
 	return KeyRecord{
 		AgentInstance: record.AgentInstance,
+		Namespace:     record.Namespace,
 		Tier:          record.Tier,
 		CreatedAt:     record.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	}
