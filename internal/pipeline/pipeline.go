@@ -1,10 +1,9 @@
-// Package pipeline defines the ordered request-stage chain that sits in
-// front of every proxied MCP tool call.
+// Package pipeline defines the ordered request-stage chain for locally
+// declared app tools.
 //
-// Phase 3 implements only authn, authz, and tool resolution for real.
-// The render/call/respond stages are deliberate no-op seams for a later
-// integration pass that will wire in internal/render and the real
-// upstream execution flow.
+// RuntimeStages combines metrics, logging, authentication, tier authorization,
+// tool resolution, rendering or per-tool MCP relay, and response handling.
+// Management tools and whole native MCP endpoints use separate dispatch paths.
 package pipeline
 
 import (
@@ -43,8 +42,8 @@ var (
 	// ErrTierForbidden reports that the caller's tier does not satisfy the
 	// requested tool's required tier.
 	ErrTierForbidden = errors.New("caller tier does not satisfy tool tier")
-	// ErrPassthroughNotSupported reports that passthrough tools have not yet
-	// been wired into the real dispatch path.
+	// ErrPassthroughNotSupported reports that a declared passthrough tool was
+	// called through an executor with no relay configured.
 	ErrPassthroughNotSupported = errors.New("passthrough tools are not yet supported")
 	// ErrNilCallContext reports misuse of the executor API.
 	ErrNilCallContext = errors.New("nil call context")
@@ -112,8 +111,7 @@ func (s namedStage) Handle(ctx context.Context, call *CallContext) error {
 	return s.fn(ctx, call)
 }
 
-// PlaceholderStage returns a no-op stage used as a seam until the real
-// render/upstream/response work is wired in by a later phase.
+// PlaceholderStage returns a named no-op stage, used by DefaultStages.
 func PlaceholderStage(name string) Stage {
 	return NewStage(name, func(context.Context, *CallContext) error {
 		return nil
@@ -168,11 +166,10 @@ func (e *Executor) Run(ctx context.Context, call *CallContext) error {
 	return err
 }
 
-// DefaultStages returns the Phase 3 stage chain in architectural order.
+// DefaultStages returns the minimal authentication/authorization stage chain.
 //
-// The first three stages do real work today. The final four are explicit
-// placeholders that will be replaced by internal/render and real
-// upstream-call/response handling in a later integration phase.
+// Its execution and response stages are placeholders. Production dispatch uses
+// RuntimeStages to wire rendering, upstream calls, and response handling.
 func DefaultStages(keys map[string]KeyRecord) []Stage {
 	return []Stage{
 		NewAuthenticationStage(keys),

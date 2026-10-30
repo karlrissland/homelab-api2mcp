@@ -4,13 +4,12 @@ package render
 
 import "github.com/karlrissland/homelab-api2mcp/internal/manifest"
 
-// Context is the data exposed to Liquid templates for a tool call.
+// Context is the data exposed to a tool's Liquid request template.
 //
-// Phase 8 populates Args plus the multi-user caller context
-// (`caller.agentInstance`, `caller.username`, `caller.tier`,
-// `caller.appInstance`) so manifests can scope upstream requests to one
-// end user without leaking the reserved caller username transport field
-// into the tool's own args.* object.
+// The pipeline populates Args, Credential, and Caller. The caller username is
+// supplied by the agent, not verified end-user identity, and its reserved
+// transport argument is stripped from Args. Response templates receive
+// request/response bindings instead of this context.
 type Context struct {
 	Args   map[string]any `json:"args"`
 	Caller *Caller        `json:"caller,omitempty"`

@@ -1,5 +1,7 @@
-// Package skillstools exposes the built-in Skill CRD MCP tools used by
-// mcp2rest's Phase 7 "skills" namespace.
+// Package skillstools exposes gateway Skill CRD tools: cluster-wide reads and
+// admin-tier writes on management sessions, plus app/global reads under
+// app-specific names on declared-tool sessions. Native endpoints do not inject
+// these tools.
 package skillstools
 
 import (
@@ -161,18 +163,12 @@ func ToolNameSlug(s string) string {
 }
 
 // RegisterReadTools adds Skill read tools to server. Both tools require any
-// valid authenticated key. appScope, when non-empty, scopes both tools to
-// Skills labeled skills.homelab.dev/app=<appScope> -- used on a per-app
-// proxied session (the app's own name) so that app's tool set only ever
-// surfaces its own Skills, and also renames the tools to
-// list_<app>_skills/get_<app>_skill (instead of the generic
-// list_skills/get_skill) so an agent juggling multiple apps' sessions in one
-// harness can't confuse one app's Skills tool for another's or for
-// mcp2rest's cluster-wide management tool of the same generic name. Pass an
-// empty appScope for mcp2rest's management session, which keeps the generic
-// list_skills/get_skill names and deliberately stays cluster-wide (any
-// admin-tier caller legitimately needs to browse/manage every app's Skills,
-// not just one).
+// valid authenticated key when called; registration itself is not filtered.
+// A non-empty appScope includes Skills labeled skills.homelab.dev/app=<appScope>
+// and global Skills with no app label, across namespaces. It also names the
+// tools list_<slug>_skills/get_<slug>_skill using ToolNameSlug(appScope).
+// An empty appScope keeps the generic list_skills/get_skill names and reads
+// cluster-wide for any authenticated tier, as on management sessions.
 func (a *API) RegisterReadTools(server *mcp.Server, apiKey string, appScope string) {
 	listName := "list_skills"
 	getName := "get_skill"

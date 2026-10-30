@@ -4,10 +4,14 @@
 
 `mcp2rest` is a shared, low-overhead Kubernetes proxy that exposes any
 `homelab-catalog` app's REST API to in-cluster AI agents as standardized
-MCP (Model Context Protocol) tools. App owners supply Liquid templates +
-a manifest; mcp2rest renders/executes them per request. See
+MCP (Model Context Protocol) tools. App owners supply a manifest with
+Liquid-rendered REST tools, individually declared MCP passthrough tools,
+or a native MCP endpoint with no locally declared tools. See
 `docs/decisions/mcp2rest-plan.md` (imported from the design session) for
-full architecture and rationale before making structural changes.
+architecture and rationale before making structural changes. The plan is
+historical design context, not proof that a feature is implemented; check
+the runtime source for current behavior and `docs/mcp2rest.md` for its
+user-facing contract.
 
 ## Priorities, in order
 
@@ -30,26 +34,27 @@ full architecture and rationale before making structural changes.
 ```
 homelab-api2mcp/
 ├── cmd/
-│   └── mcp2rest/            # main package — flag/env parsing, wiring, startup only
+│   └── mcp2rest/            # main package — env parsing, wiring, startup only
 │       └── main.go
 ├── internal/
-│   ├── mcpserver/           # MCP Streamable HTTP transport + JSON-RPC dispatch
+│   ├── mcpserver/           # management/app routing, MCP transport + native dispatch
 │   ├── pipeline/            # ordered, named middleware stages (authn→authz→...→respond)
 │   ├── render/              # Liquid render context + execution (request/response templates)
 │   ├── discovery/           # ConfigMap informer, routing table
-│   ├── keys/                # per-agent-instance key mint/store/revoke, Secret delivery
+│   ├── keys/                # durable namespace-qualified agent keys + bootstrap
+│   ├── manifest/            # shared app/tool models and validation
 │   ├── adminapi/            # register_app/list_apps/create_key/... management tools
-│   ├── skillstools/         # list_skills/get_skill/create_skill/... built-in tool namespace
-│   ├── passthrough/         # upstream-MCP relay mode
-│   └── k8s/                 # thin Kubernetes client wrapper shared by the above
-├── manifests/                # Kubernetes Deployment/Service/Ingress/RBAC for mcp2rest itself
+│   ├── skillstools/         # generic management + app-scoped Skill CRD tools
+│   ├── passthrough/         # per-tool MCP relay + opaque native endpoint proxy
+│   └── upstreamcreds/       # gateway-namespace upstream Secret credential cache
+├── manifests/                # RBAC, Prometheus alert rules, Grafana dashboard
 ├── skills/
 │   └── mcp2rest-usage/
-│       └── SKILL.md         # "how to use mcp2rest" — bundled + applied as a Skill CRD at deploy time
+│       └── SKILL.md         # usage source; provisioners must deploy a Skill CR to expose it
 ├── docs/
 │   ├── decisions/           # architecture/design-decision docs (mirrors the homelab convention)
 │   └── mcp2rest.md          # user-facing contract (mirrors homelab's docs/ai-providers.md)
-├── testdata/                 # fixtures for unit/integration tests (manifests, templates)
+├── testdata/                 # reserved; render fixtures live in internal/render/testdata/
 ├── Dockerfile
 ├── .dockerignore
 ├── go.mod / go.sum
@@ -70,6 +75,41 @@ homelab-api2mcp/
 - Tests live next to the code they test (`foo.go` + `foo_test.go`), not in
   a parallel `tests/` tree, except for `testdata/` fixtures and
   cluster-level integration tests that need a real/fake API server.
+
+**Existing implementation versus required boundaries:** the `internal/k8s`
+rule above is a required architectural boundary, not a currently
+implemented package (the directory has no Go source). Existing packages
+including `discovery`, `keys`, `adminapi`, `skillstools`, `mcpserver`, and
+`upstreamcreds`, as well as `cmd/mcp2rest`, import `client-go` directly.
+This is existing technical debt, not permission to weaken the rule or add
+more direct imports. Preserve these deliberate requirements and flag
+conflicts; keep boundary refactors separate from documentation fixes.
+
+## Runtime contract reminders
+
+- `/mcp` is management plus cluster-wide Skill tools, not app API tools.
+  All management calls require the same gateway `admin` tier; management
+  discovery is not filtered by authorization. Skill reads accept any valid
+  tier. Declared app tools live on `/{app}/mcp`, with tier-filtered discovery
+  and call-time enforcement, plus app/global Skill reads under app-specific
+  names.
+- Gateway keys identify agent namespace+instance+tier, not app scope.
+  `authorizedAgents` ensures keys; it is not an app allowlist. There is no
+  distinct proxy-admin scope. Do not document planned isolation as enforced.
+- Native endpoints (no declared tools, `upstreamMCPURL` set) authenticate a
+  valid gateway key but bypass the declared-tool pipeline and tier filtering.
+  Their protocol bodies and tool surface are upstream-owned; the gateway
+  injects neither management nor Skill tools.
+- Upstream credentials are separate server-owned values from gateway-
+  namespace `<app>-api-keys`/`<app>-mcp-keys` Secrets. Authoritative agent
+  keys and the persistent bootstrap Secret also live in the gateway
+  namespace; harness/agent-namespace delivery is the provisioner's job.
+  `get_key` supports explicit admin-only retrieval of a persisted raw key.
+- Read the execution mode before describing schema validation, rendering,
+  caller identity, or result/error fidelity. Native forwarding is opaque;
+  declared passthrough flattens results, whereas rendered REST uses Liquid.
+- Derive runtime guarantees from registrations, authorization gates, and
+  dispatch code rather than historical design proposals.
 
 ## Required skills
 
@@ -93,8 +133,10 @@ homelab-api2mcp/
 
 ## Non-goals reminders (don't silently build these)
 
-- No real governance/security policy logic yet (stages are pass-through
-  stubs) — see `plan.md` Phase 15.
+- No governance/decision-engine security policy yet — see
+  `docs/decisions/mcp2rest-plan.md` Phase 15. Authentication and declared-tool
+  tier authorization are implemented; do not call those enforcement stages
+  pass-through stubs.
 - No WASM plugin loader yet — the pipeline stage interface just needs to
   stay WASM-loadable-shaped.
 - No automatic key rotation — manual only.

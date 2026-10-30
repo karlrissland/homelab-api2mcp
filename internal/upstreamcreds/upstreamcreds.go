@@ -124,9 +124,9 @@ func (c *Cache) readSecret(ctx context.Context, name string) (map[string]string,
 // instance + credential key, scoped by tool type (rendered tools read
 // from the api-keys Secret, passthrough tools read from the mcp-keys
 // Secret). Returns "" when the key is empty, the app is unknown, or the
-// credential is not present — callers should treat an empty result as
-// "no credential available" and let the backend's own auth rejection
-// surface as the error, not treat it specially here.
+// credential is not present. Declared-tool execution passes missing credentials
+// through as empty values; native endpoint forwarding rejects a missing
+// configured credential before calling upstream.
 func (c *Cache) Credential(toolType manifest.ToolType, appInstance, key string) string {
 	if key == "" {
 		return ""

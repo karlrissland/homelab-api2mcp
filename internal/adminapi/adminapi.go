@@ -115,7 +115,7 @@ type KeyRecord struct {
 	CreatedAt     string        `json:"createdAt"`
 }
 
-// CreateKeyResult returns raw key material once, at creation time only.
+// CreateKeyResult returns the newly issued raw key material and agent identity.
 type CreateKeyResult struct {
 	AgentInstance string        `json:"agentInstance"`
 	Namespace     string        `json:"namespace"`
@@ -130,17 +130,12 @@ type GetKeyParams struct {
 	Tier          manifest.Tier `json:"tier" jsonschema:"Tier to fetch: user or admin"`
 }
 
-// GetKeyResult returns the current raw key material for one agent+tier.
+// GetKeyResult returns persisted raw key material for an agent namespace,
+// instance, and tier.
 //
-// This is a narrow, deliberate exception to mcp2rest's normal "raw key
-// material never leaves mcp2rest except at mint time" posture (see
-// docs/decisions/mcp2rest-plan.md's "hlctl never touches raw key material"
-// principle). It exists only for callers that must bake a literal
-// credential value into another system's own static config at deploy time
-// (e.g. hlctl writing HLCTL_MCP_AUTH_HEADER_VALUE for OpenClaw's
-// provision-mcp-server hook, which has no indirect secret-reference
-// mechanism of its own) and still requires the caller to hold mcp2rest's
-// own admin scope.
+// Admin-tier provisioners use this result to reuse an agent's credential
+// when configuring its harness. The gateway retains authoritative storage;
+// provisioners own delivery and must protect the returned key material.
 type GetKeyResult struct {
 	AgentInstance string        `json:"agentInstance"`
 	Namespace     string        `json:"namespace"`
@@ -218,7 +213,7 @@ func (a *API) SetInternalBaseURL(baseURL string) {
 func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "register_app",
-		Description: "Validate a manifest, upsert its discovery ConfigMap, and ensure user-tier keys exist for each authorized agent instance.",
+		Description: "Validate a manifest, upsert its discovery ConfigMap, and ensure a key exists for each namespace-qualified authorized agent at its declared tier (default user). Admin tier required. authorizedAgents ensures keys; it is not an app access allowlist.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -261,8 +256,8 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_apps",
 		Description: "List every app registered with mcp2rest, from the live discovery table. Admin tier " +
-			"required. Returns app names and their declared tools/schemas only -- it does NOT return a " +
-			"connection URL or any API key, and calling a listed tool name directly on THIS session will " +
+			"required. Returns app registrations, declared tools/schemas, and derived gateway connection " +
+			"fields, but no API key. Calling a listed tool name directly on THIS session will " +
 			"fail (these tools do not exist here). Each returned app includes mcpInternalUrl -- a " +
 			"ready-to-use, in-cluster URL (e.g. \"http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp\") " +
 			"-- PREFER this for any agent harness, since every harness mcp2rest serves runs inside the " +

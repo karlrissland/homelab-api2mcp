@@ -54,8 +54,8 @@ const (
 	// ToolTypeRendered executes RequestTemplate/ResponseTemplate against
 	// a REST upstream.
 	ToolTypeRendered ToolType = "rendered"
-	// ToolTypePassthrough relays the call to an upstream MCP server
-	// unchanged, skipping the render stages entirely.
+	// ToolTypePassthrough maps a declared tool to an upstream MCP tool,
+	// bypassing Liquid execution and flattening the upstream result to text.
 	ToolTypePassthrough ToolType = "passthrough"
 )
 

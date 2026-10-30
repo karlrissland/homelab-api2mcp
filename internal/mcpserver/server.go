@@ -1,10 +1,9 @@
 // Package mcpserver builds the mcp2rest MCP (Model Context Protocol)
-// server and its Streamable HTTP transport handler.
+// servers, endpoint routing, and Streamable HTTP transport handlers.
 //
-// This package owns only transport/wiring concerns. Tool business logic
-// (rendering, authz, upstream calls) is added by later phases via
-// internal/pipeline; Phase 1 registers a single hardcoded "echo" tool to
-// prove the transport end to end before anything else is layered on.
+// NewRuntimeHandler dispatches management calls, declared app tools backed by
+// internal/pipeline, and authenticated native MCP endpoint forwarding. New
+// and NewHandler retain the standalone echo server for transport smoke tests.
 package mcpserver
 
 import (
@@ -20,7 +19,8 @@ import (
 // does not exist on the go-sdk version this repo pins (see the version
 // pin note on the go-sdk require line in go.mod) -- the equivalent
 // explanatory text instead lives entirely in the session Instructions
-// string passed to mcp.NewServer, which every client already receives.
+// strings supplied by NewRuntimeHandler for management/declared app sessions.
+// Native endpoint forwarding retains the upstream server's own metadata.
 var Info = &mcp.Implementation{
 	Name:    "mcp2rest",
 	Version: "0.1.0",
@@ -37,9 +37,8 @@ func New() *mcp.Server {
 }
 
 // NewHandler wraps server as a Streamable HTTP handler suitable for
-// http.ListenAndServe. Every request is served by the same server
-// instance; per-request routing to different app instances is added in
-// a later phase (internal/discovery).
+// http.ListenAndServe. Every request is served by the same server instance.
+// Use NewRuntimeHandler for management and per-app endpoint routing.
 func NewHandler(server *mcp.Server) http.Handler {
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return server

@@ -1,82 +1,52 @@
 # mcp2rest — REST→MCP Proxy: Feasibility & Architecture Plan
 
-## Bootstrap provisioning update
+## Implemented baseline (reviewed 2026-10-30)
 
-The implemented bootstrap contract supersedes the mint-and-print proposal
-in Open Decision 5 and Phase 6, and the proposed separate narrow hlctl
-bootstrap key mentioned elsewhere below. The gateway creates or loads
-`mcp2rest-bootstrap-admin` (`key` data entry) in its own namespace before
-listening, restores it after restart, and never prints it. hlctl reads
-this Secret using its Kubernetes credentials and authenticates management
-MCP calls with the **full-admin** key; a registration-only tier is not
-implemented. No agent is automatically given this credential.
+This decision record preserves the design rationale, not installation
+instructions. Use the [README](../../README.md) for setup and the
+[runtime contract](../mcp2rest.md) for exact interfaces. Code in this
+repository is authoritative; [tasks.md](../../tasks.md) separates local
+implementation from unverified downstream rollout.
 
-Agent-key persistence now also supersedes the earlier direct-to-agent
-Secret delivery and raw-array-only design in §3.3/Phase 5 and the
-`get_key` resolution description below. Authoritative namespace-qualified
-agent Secrets live in the gateway namespace, contain full identity/tier/
-creation metadata, and are restored before serving requests. hlctl obtains
-keys through the existing management API and owns harness delivery.
-Legacy raw-only agent Secrets require one-time reissuance/re-delivery;
-their missing authorization metadata is never inferred.
+| Area | Implemented behavior | Superseded proposal / remaining limitation |
+|---|---|---|
+| Topology | Shared gateway with process-local verification and upstream-credential caches | **Run one active replica.** Persistent Secrets survive restarts, but there is no live cross-replica issuance/revocation/cache coordination; 2+ active replicas are not supported. |
+| Bootstrap | Create/load gateway-namespace `mcp2rest-bootstrap-admin`, data entry `key`, before listening; never print it | Mint-and-print and a separate registration-only hlctl key were proposals. hlctl's bootstrap contract uses the **full-admin** credential, not an implemented narrow tier. |
+| Agent credentials | Gateway-owned, namespace-qualified records in gateway-namespace `mcp2rest-agent-<identity-hash>` Secrets; versioned `keys.json` includes identity, tier, and creation metadata; restored before serving | Raw-array-only Secrets and gateway writes into agent namespaces are obsolete. hlctl obtains keys via management tools and owns harness delivery. Legacy raw-only keys require reissuance/re-delivery, not inferred authorization metadata. |
+| Authorization | Global user/admin tiers; admin also authorizes management and Skill writes | No separate per-app grant store or distinct control-plane admin scope. `authorizedAgents` ensures identity/tier keys; it is not a per-app ACL. |
+| App routes | Declared rendered/per-tool passthrough tools **or** a transparent native MCP endpoint (§3.5) | No combined local/native inventory. Native routes do not inject Skill tools or enforce mapped-tool tiers. |
+| Upstream credentials | Provisioner-owned `<app>-api-keys` / `<app>-mcp-keys` in gateway namespace; read-only preload and manual `reload_cache` | No registration payload credential values or Secret watcher. Native configured credentials fail closed; legacy mapped tools retain empty-string fallback (§3.8). |
+| Future stages | Named Go pipeline and observability exist | Governance/policy enforcement, WASM loader/ABI, automatic rotation, per-user upstream credentials, and full per-tool ACLs remain deferred. |
 
-See README's bootstrap and persistent-agent-key sections and
-`manifests/rbac/bootstrap-role.yaml` for the current RBAC, readiness,
-retrieval, migration, and manual regeneration contract, plus
-`manifests/rbac/agent-keys-role.yaml` for the agent repository's own-namespace
-permissions. Bootstrap and agent verification records are restored; live
-multi-replica cache coordination remains outside this implementation.
-The dated status and original decisions below describe earlier rollout
-state and do not imply this change has been deployed downstream.
+Startup waits for discovery sync, validates/restores bootstrap and agent
+credentials, then loads upstream credentials before binding HTTP
+(`cmd/mcp2rest/main.go`). Invalid persisted agent/bootstrap state or a
+failed initial credential reload prevents startup. Persistence does not
+make live out-of-band Secret edits immediately effective.
 
-## Current status (2026-10-01)
+### Historical rollout snapshot (2026-10-01; not current verification)
 
-`homelab-api2mcp` itself (Phases 0–9, 13–14, 16) is implemented, unit
-tested, and shipping green CI/CD on `main` — the binary builds, boots a
-real MCP Streamable HTTP server, handles rendered + passthrough tools
-through the full pipeline (authn → authz → tool-resolve → render →
-upstream-call → render → respond), discovers apps via ConfigMaps,
-mints/delivers per-instance keys, exposes the management/skills tool
-sets, and now resolves per-tool upstream credentials (§3.8).
+Earlier reports described `homelab#216` platform provisioning as
+substantially done, `homelab#215` schema/validation as partly done with
+registration pending, `homelab#217` credential provisioning as pending,
+and `homelab-catalog#103` MeTube work as blocked. Those reports and later
+live-debugging notes in `tasks.md` are historical evidence only. This
+repository cannot establish today's hlctl/catalog code, issue status,
+cluster deployment, or CI health. In particular, the old report that a
+restart loses all keys is superseded by persistent bootstrap/agent
+Secrets; the old assertion that end-to-end use is impossible is not a
+current rollout conclusion.
 
-**The `homelab` (hlctl) team is actively implementing the cross-repo
-remainder** (tracked on `homelab#215`/`#216`/`#217`), not merely
-planned:
-
-- `homelab#216` (Phase 11, platform provisioning): **substantially
-  done** — `internal/mcp2rest.Ensure` deploys mcp2rest's Namespace,
-  ServiceAccount, Deployment, Service, RBAC, and Ingress on every
-  cluster bootstrap, pulling the now-public `ghcr.io/karlrissland/
-  homelab-api2mcp` image. Two flagged findings worth tracking: (1) the
-  key store is single-replica/in-memory only — a restart loses all
-  minted keys including the bootstrap admin key; (2) the
-  `mcp2rest-keys-secrets` ClusterRole is applied but intentionally not
-  yet bound anywhere (correctly deferred to per-namespace
-  `RoleBinding`s at registration time, not cluster bootstrap).
-- `homelab#215` (Phase 10, hlctl integration): **schema + validation
-  half done** — `mcpTools:` app.yaml block + `hlctl app validate`
-  support shipped. **Still open**: the deploy-time ConfigMap authoring
-  + `register_app` JSON-RPC call — nothing yet actually registers an
-  app with a running mcp2rest.
-- `homelab#217` (this session's upstream-credential design):
-  acknowledged and picked up by the hlctl team as part of the same
-  in-progress registration work — not started yet.
-- **Phase 12 (`homelab-catalog#103`, MeTube pilot)**: manifest/template
-  authoring not started; blocked on `homelab#215`'s registration half.
-
-**Net effect**: real end-to-end testing (an agent calling a real
-MeTube-backed MCP tool through a cluster-deployed mcp2rest) is not
-possible yet — the last missing piece is `register_app` wiring in
-`homelab#215`. Once that lands, Phase 12 can exercise the whole chain.
-Local/manual testing of mcp2rest alone (running the published
-container, hand-crafting a ConfigMap + Secrets, driving it with a raw
-MCP/JSON-RPC client or `curl`) is possible today. See `tasks.md` for the
-authoritative per-phase status in this repo.
+The later [2026-10-28 integration acceptance](../../README.md#recorded-integration-acceptance)
+records operator-confirmed credential changes and completed gateway,
+provisioner, and Hermes issues. It does not turn the original plan's
+remaining proposals into shipped capabilities or establish Home
+Assistant-specific acceptance.
 
 ## Guiding Principles (north star for every design choice below)
 
-This plan is intentionally still being designed on the fly — the
-architecture below is our current best thinking, not locked-in. Every
+The original plan was designed iteratively; dated refinements below
+retain that reasoning trail. Every
 choice should keep optimizing for:
 
 - **Simple** — fewest moving parts/protocols/identities that solve the
@@ -89,9 +59,8 @@ choice should keep optimizing for:
   rotation, etc. later, without a rewrite. We are deliberately deferring
   those, not designing them away.
 
-Expect this document to keep changing shape as we think it through further
-— sections below are marked with revision notes where a later conversation
-turn changed an earlier decision, so the reasoning trail isn't lost.
+Implemented corrections are marked explicitly where the original
+proposal differs from the runtime.
 
 ## 1. Problem & Goal
 
@@ -108,6 +77,11 @@ without re-architecting.
 
 Strong existing precedent in `homelab` / `homelab-catalog` de-risks most of
 this:
+
+The following is the **original feasibility assessment**, including
+references to those repositories at design time, not a fresh audit of
+their current implementation. Its "net-new"/"today" statements describe
+the pre-implementation baseline.
 
 - **Liquid-as-integration-contract is already proven**: `providermap`
   (`internal/providermap/providermap.go`) renders per-app Liquid templates
@@ -155,8 +129,9 @@ surface, not a weekend project.
 
 ## 3. Confirmed Decisions
 
-- **Topology**: one shared, multi-tenant proxy Deployment (not one pod per
-  app) — 2+ replicas behind a single ClusterIP Service.
+- **Topology**: one shared, multi-tenant gateway (not one pod per app)
+  behind a ClusterIP Service. The original 2+ replica target is deferred:
+  use one active replica until verification-cache coordination exists.
 - **External routing**: single host, path-routed per app instance —
   `https://mcp2rest.<dns.zone>/<app-instance>/mcp`.
 - **Transport**: MCP Streamable HTTP (matches `kubernetes-mcp-server` and
@@ -174,8 +149,9 @@ surface, not a weekend project.
   named middleware chain** (authn → authz → tool-resolve →
   render-request → upstream-call → render-response → respond), with any
   future governance/security stage insertable without re-architecting.
-  No real policy logic in v1 — stages beyond authn/authz are no-ops or
-  pure observability (logging/metrics) for now.
+  Authn/authz, tool resolution, rendering, upstream execution and response
+  handling are functional; logging/metrics are observability, not policy.
+  Real governance/security-policy stages remain unimplemented.
 - **Tool definition shape** (your design, adopted): for each REST operation
   an app wants exposed, the app author supplies a **`request.liquid`** and
   a **`response.liquid`**, plus one **manifest (YAML/JSON)** per app
@@ -184,17 +160,15 @@ surface, not a weekend project.
   (JSON-schema-shaped). All of this (manifest + templates) is delivered as
   **one ConfigMap scoped to the app's own namespace** — Kubernetes is the
   durable state store; no separate database.
-- **Registration flow (revised — see 2026-09-27 refinement below)**: at
-  deploy time, `hlctl` writes/updates that ConfigMap, then calls
-  mcp2rest to register it. The proxy **validates** the manifest+templates
-  and either returns an error (surfaced to the operator like any other
-  deploy-time validation failure) or accepts the registration. **mcp2rest
-  — not `hlctl` — mints the per-agent API keys and writes the Secret
-  directly into each authorized agent's own namespace.** `hlctl` never
-  handles raw key material; it only supplies the current allow-list
-  (which agents/namespaces should be authorized) as part of the
-  registration call.
-- **Self-healing recommendation (added by me, confirm at kickoff)**: in
+- **Registration flow (implemented contract)**: `register_app` accepts a
+  manifest and owning namespace, validates it and upserts the discovery
+  ConfigMap. It ensures gateway-owned keys for supplied
+  `authorizedAgents` using each declared tier (default `user`). hlctl
+  retrieves keys through management tools and delivers them to harnesses.
+  The earlier "gateway delivers directly; hlctl never handles raw keys"
+  proposal is superseded. ConfigMap visibility follows informer events,
+  not a synchronous routing-table mutation.
+- **Self-healing discovery (original recommendation, now implemented)**: in
   addition to the push-on-deploy path, the proxy also **lists/watches**
   ConfigMaps by a label (e.g. `mcp2rest.homelab.dev/app=<name>`) cluster-wide
   on its own startup and on change — this is the same
@@ -204,44 +178,45 @@ surface, not a weekend project.
   ConfigMaps already sitting in etcd, instead of requiring an operator to
   re-run `hlctl app setup` for every app. The ConfigMap remains the single
   source of truth either way; the admin-API push is purely the synchronous
-  fast path that lets `hlctl` get an immediate validation result and API
-  keys back in the same command invocation.
-- **Upstream auth**: reuse `internal/credentials` + `internal/aicreds`
-  as-is — the manifest references a credential env-var name; `hlctl`
-  resolves it from the existing per-app credential store and hands the
-  *value* to the proxy only via the registration call (never written to
-  `app.yaml`/`cluster.yaml`/Helm release history).
+  fast path for validation and key assurance. The response includes
+  newly created key metadata, not raw credentials; use `get_key` for
+  delivery. A registration call is not a multi-resource transaction.
+- **Upstream auth**: the original registration-call value transfer was
+  replaced by provisioner-written gateway-namespace Secrets (§3.8).
+  Manifest `upstreamCredentialEnv` names a Secret data key, not a runtime
+  process environment lookup.
 - **Config-declaration location**: new `mcpTools:` block in `app.yaml`,
   schema-owned by `hlctl` (same ownership convention as `providerMap`).
-- **Key/scope ownership (revised 2026-09-27)**: dropped the earlier
+- **Key/scope ownership (revised after persistence)**: dropped the earlier
   `hlctl mcp2rest key create|list|revoke` CLI idea. mcp2rest owns key
-  material end-to-end — minting, storing, rotating, revoking, and writing
-  the Secret into the agent's own namespace — with **zero** involvement
-  from `hlctl` beyond the one registration call. `hlctl`'s only remaining
-  job is expressing *intent* (the `allowedApis` list) and triggering
-  registration at deploy time.
+  lifecycle — minting, gateway-namespace storage, manual rotation and
+  revocation. hlctl owns provisioner-side key retrieval/harness delivery;
+  `allowedApis` was a proposal, not an implemented authorization field.
 
 ### 3.1 Refinement (this session, 2026-09-27): single MCP surface, no separate admin API
 
 Talking it through further, two more decisions:
 
 - **No bespoke admin REST API at all.** mcp2rest exposes exactly **one**
-  interface — MCP (Streamable HTTP) — with two tool namespaces:
+  interface — MCP (Streamable HTTP). The original two tool categories
+  below were later joined by Skill tools (§3.4):
   1. **Per-app proxied tools** — the regular case, one tool set per
-     registered app instance, scoped by the caller's API key.
+     registered app instance, filtered by the caller's key tier.
   2. **A reserved management tool set** on mcp2rest itself
      (`register_app`, `deregister_app`, `list_apps`, `create_key`,
      `list_keys`, `revoke_key`, `rotate_key`, `get_manifest`, …), gated by
-     an **admin** scope. Ongoing key lifecycle management is done by
-     *talking to an agent* that holds the admin scope — not a new hlctl
+     **admin** tier. Ongoing key lifecycle management can be done by
+     *talking to an agent* that holds admin tier — not a new hlctl
      CLI, not a second bespoke API. This is the "leverage our agents for
      this instead of building another API" call.
-  - `hlctl` becomes a **minimal MCP client** for exactly one purpose:
-    calling `register_app`/`deregister_app` at deploy time, authenticated
-    with a bootstrap/admin key `hlctl` holds. Since Streamable HTTP MCP is
-    JSON-RPC 2.0 over a single HTTP POST endpoint, this does not require
-    pulling in a full MCP client SDK — a small typed JSON-RPC helper in
-    `internal/mcpproxy` is enough for the one call `hlctl` needs to make.
+  - `hlctl`'s integration contract uses MCP for registration, key retrieval
+    and credential-cache reload, authenticated with the persisted
+    **full-admin** bootstrap key. The earlier single-call/narrow-key
+    proposal is superseded. The original proposal favored a small typed
+    JSON-RPC helper rather than a full SDK for deploy-time calls.
+    Streamable HTTP also has session/header semantics; transparent
+    native endpoints may use streaming GET/DELETE as well as POST.
+    The downstream client implementation is owned by `homelab`.
   - This unifies the protocol surface (one auth model, one transport, one
     schema style) instead of running a REST admin API alongside the MCP
     server.
@@ -252,12 +227,13 @@ An app can surface more than one MCP tool, and each tool can be annotated
 in its manifest as `tier: user` or `tier: admin` (e.g. Gitea's
 `list_my_repos` vs. `admin_create_user`). Resolved model (kept simple per
 the Guiding Principles): **a key is issued as `user` or `admin` for a
-given app**; `admin` implies `user`. A call to an `admin`-tier tool with a
+namespace-qualified agent**; `admin` implies `user`. A call to an `admin`-tier tool with a
 `user`-tier key is rejected at the authz pipeline stage. Full per-tool
-allow-lists (beyond this two-tier split) remain a Phase-2 refinement —
-this is *not* the same thing as the separate "admin scope" that gates
-mcp2rest's own management tool set (§3.1) — that is a proxy-wide
-control-plane privilege; this is a per-app, per-tool data-plane tier.
+allow-lists (beyond this two-tier split) remain deferred future work —
+the original proposal distinguished control-plane admin scope from
+per-app admin tier, but the implementation does **not**: an admin-tier
+key also authorizes management tools and Skill writes. User keys are not
+restricted to the app that caused their creation.
 
 ### 3.3 Multi-user / per-caller identity scoping — e.g. Penpot (added 2026-09-30)
 
@@ -268,13 +244,15 @@ records. Resolved for v1:
 - **Keys are minted per agent *instance*, not per agent role/app.** This
   is a real, needed departure from the existing `aicreds.SecretName`
   precedent (keyed only by app name, shared across every Hermes user
-  instance today) — Penpot-style scoping is meaningless without knowing
+  instance at design time) — Penpot-style scoping is meaningless without knowing
   *which* end user a given call is for. Concretely: one Hermes user's
   Helm-release instance gets its own mcp2rest key(s), not a key shared
   across every Hermes instance in the `hermes` namespace.
-- **Secret naming must include the instance name**, not just the app
-  name — `<agent-instance>-mcp2rest-keys`, delivered into that instance's
-  namespace (see Open Decision 6 for the exact RBAC/naming shape).
+- **Storage identity includes agent namespace and instance**, not just
+  app/role: `keys.AgentSecretName` hashes that identity into
+  `mcp2rest-agent-<identity-hash>` in the gateway namespace. The original
+  `<agent-instance>-mcp2rest-keys` agent-namespace Secret was a delivery
+  proposal, not today's authoritative store. hlctl owns delivery copies.
 - **v1 upstream-scoping mechanism: header/param impersonation only.** The
   render context for `request.liquid` gains a `caller` object
   (`{agentInstance, username, tier, appInstance}`). For apps whose shared
@@ -284,31 +262,36 @@ records. Resolved for v1:
   `caller.username` to build that. **No new per-(app,user) credential
   storage in v1** — that (storing a distinct upstream token per end user,
   for apps that require it instead of supporting impersonation) is an
-  explicit Phase-2 candidate, deferred because it's meaningfully more
+  explicit future candidate (not numbered delivery Phase 2), deferred because it's meaningfully more
   work than reusing the existing per-app credential store.
+- `caller.username` is a client-supplied reserved argument
+  (`__mcp2rest_caller_username`), stripped before Liquid receives `args`.
+  It is an impersonation hint, not an independently verified user identity.
 - **Practical v1 consequence**: apps that require true per-user tokens
   (no shared-admin-plus-impersonation option) are simply **not yet
-  supportable as multi-user mcp2rest tools** until Phase 2 lands. This is
+  supportable as multi-user mcp2rest tools** until that deferred feature lands. This is
   an explicit, accepted v1 gap, not a silent one.
 
 ### 3.4 Built-in "skills" tool namespace (added 2026-09-30)
 
 In addition to per-app proxied tools and the management tool set,
-mcp2rest ships a third, always-present built-in tool namespace wrapping
-the existing `Skill` CRD system (`internal/skillscrd`):
+mcp2rest ships a built-in tool namespace wrapping the `Skill` CRD system
+through `internal/skillstools` (the referenced `internal/skillscrd` belongs
+to `homelab`, not this repo):
 
-- `list_skills`, `get_skill` — read, available to **any** authenticated
-  key. Per your answer, these are **not** scoped down to the calling
-  key's authorized apps — any valid key can read any Skill cluster-wide
-  (see Open Decision 8 for the accepted-risk note on this).
+- On `/mcp`, `list_skills` / `get_skill` remain cluster-wide and available
+  to **any** authenticated key, not just admins. On locally defined app
+  routes, `list_<slug>_skills` / `get_<slug>_skill` return that app's
+  labeled Skills plus unlabeled/global Skills (Phase 25). Transparent
+  native routes inject no Skill tools. The original everywhere-unfiltered
+  proposal was revised; management reads remain deliberately broad.
 - `create_skill`, `update_skill`, `delete_skill` — write, **admin-scope
-  only** (the same proxy-wide admin scope from §3.1, not the per-app
-  `admin` tier from §3.2 — writing a Skill is a control-plane action, not
-  a per-app data-plane one).
+  only**, on `/mcp`. This is the same implemented admin tier used by
+  mapped tools, not a separate control-plane credential class.
 - **Direction of travel: replaces the Cluster Agent's direct K8s RBAC
-  read access to Skill CRDs** (per your answer) — today the Cluster Agent
-  lists/reads `Skill` CRDs directly via its own `hlctl-skill-reader`
-  ClusterRole; going forward, that read path should move behind this
+  read access to Skill CRDs** (original intent) — at design time the
+  Cluster Agent read `Skill` CRDs via its own `hlctl-skill-reader`
+  ClusterRole; the proposed future read path would move behind this
   mcp2rest tool too, for every agent including the Cluster Agent. Note:
   actually retiring the Cluster Agent's existing direct RBAC is a
   `homelab`-side follow-up, not something this plan changes by itself —
@@ -320,22 +303,21 @@ the existing `Skill` CRD system (`internal/skillscrd`):
 
 ### 3.5 Passthrough mode — apps with their own MCP server (added 2026-09-30)
 
-For apps that already ship a native MCP server (nothing to transform),
-a manifest can declare `type: passthrough` with an `upstreamMcpUrl`
-instead of `request.liquid`/`response.liquid` pairs. mcp2rest then:
+There are now two distinct modes; the original per-tool relay design
+must not be mistaken for transparent native forwarding.
 
-- Performs its normal authn/authz(scope) pipeline stages exactly as for a
-  regular proxied app (same API-key/tier model, same ingress path
-  convention) — the point is reusing the same auth/routing machinery, not
-  rebuilding it per passthrough app.
-- **Relays** the JSON-RPC call to the upstream MCP server, skipping the
-  Liquid render stages entirely.
-- Can **tag specific upstream tool names as `admin`-only** in the
-  passthrough manifest, filtering what a `user`-tier key even sees in its
-  tool list — this directly mirrors `kubernetes-mcp-server`'s own
-  `toolsets`/`denied_resources` filtering precedent already in this
-  codebase (`clusteragent/mcpserver.go`'s `buildMCPServerConfigTOML`), just
-  applied to an arbitrary upstream MCP server instead of a bundled one.
+| Manifest shape | Request behavior | Inventory and authorization |
+|---|---|---|
+| Explicit `tools`, including `type: passthrough`, `upstreamToolName`, and effective `upstreamMCPURL` | Local MCP SDK dispatch through the named pipeline; relay invokes the selected upstream tool, without Liquid execution | Declared tool list with local user/admin filtering, plus app-scoped Skill reads. Rendered and per-tool relay definitions can coexist. |
+| No tools plus app-level `upstreamMCPURL` (`IsNativeMCP`) | Authenticate gateway bearer key, then reverse-proxy the HTTP endpoint, including streaming/session traffic, without interpreting MCP bodies | Upstream owns discovery, schemas, tools/resources/prompts and their policy. No synthetic tools, Skill injection, combined inventories or local per-tool tier enforcement. |
+
+Use the exact JSON field `upstreamMCPURL`, not the original prose spelling
+`upstreamMcpUrl`. Native forwarding strips gateway Authorization and
+cookies; only a server-resolved upstream bearer credential may be
+injected. If a native endpoint configures `upstreamCredentialEnv`, a
+missing credential rejects forwarding rather than silently calling the
+upstream anonymously. See `internal/manifest/manifest.go`,
+`internal/mcpserver/runtime.go` and `internal/passthrough/proxy.go`.
 
 ### 3.6 Plugin extensibility — reserved, not built in v1 (added 2026-09-30)
 
@@ -351,6 +333,8 @@ Decisions' `authn → authz → tool-resolve → render → call → render →
 respond` chain) as an additional named stage. No implementation in v1 —
 this only constrains the pipeline's internal stage interface to be
 "WASM-loadable-shaped" from the start so it isn't a rewrite later.
+This is architectural intent only: the current Go `Stage` abstraction is
+not a shipped WASM ABI, sandbox, loader, or hot-loading implementation.
 
 ### 3.7 Meta-Skill: teaching agents how to use mcp2rest itself (added 2026-09-30, RESOLVED 2026-09-30)
 
@@ -361,11 +345,12 @@ user/admin tier split behaves, and how errors from the pipeline surface.
 **Resolved — keep it simple**: no new platform-skill directory
 convention needed. `homelab-api2mcp` ships its own `Skill` CRD source
 content (a `SKILL.md`-shaped file) alongside its own deployment manifests,
-and when mcp2rest is deployed as a platform service, that Skill is applied
+and the downstream provisioning contract is that this Skill is applied
 to the cluster like any other — discoverable via `list_skills`/
 `get_skill` (§3.4) exactly the same way an app's own Skills are. mcp2rest
 dogfoods its own built-in skills tool for its own documentation; no
-separate mechanism required.
+separate mechanism required. The source exists here; actual downstream
+application and post-bootstrap visibility are not verified by this repo.
 
 ### 3.8 Per-tool upstream credential injection (RESOLVED — homelab-api2mcp#1)
 
@@ -381,10 +366,10 @@ through a dedicated design conversation. Final design:
   EffectiveCredentialEnv(App)`/`EffectiveUpstreamMCPURL(App)` return the
   tool-level value when set, else the app-level value. An empty result
   means "no credential required" — no special-casing needed downstream.
-- **Secret shape**: one Secret per app instance, **native multi-key
-  `Secret.data`** (not a JSON blob) — two distinct Secrets per app
-  instance, differentiated by naming convention from the existing
-  `<agent-instance>-mcp2rest-keys` agent-key Secrets:
+- **Secret shape**: **native multi-key `Secret.data`** (not a JSON blob)
+  in two distinct Secrets per app
+  instance, distinct from gateway-owned `mcp2rest-agent-<identity-hash>`
+  agent-key Secrets:
   - `<app-instance>-api-keys` — credentials for rendered/REST tools.
   - `<app-instance>-mcp-keys` — credentials for passthrough tools.
   Both live in **mcp2rest's own namespace**, not the app's namespace.
@@ -392,20 +377,28 @@ through a dedicated design conversation. Final design:
   (not passed through `register_app`). mcp2rest only ever *reads*
   these Secrets — this is a `get`-only RBAC grant
   (`manifests/rbac/upstream-creds-role.yaml`), smaller and namespace-
-  scoped, distinct from the existing cross-namespace
-  `mcp2rest-keys-secrets` ClusterRole used for agent key delivery.
+  scoped, distinct from `agent-keys-role.yaml` for persistent agent keys.
+  The old cross-namespace delivery ClusterRole is a legacy artifact, not
+  a requirement of the current credential repository.
   Secret lifecycle on `deregister_app` is explicitly left to `hlctl` to
   manage — mcp2rest does no deregister-time cleanup of its own.
 - **Full in-memory preload, manual reload only** (`internal/
   upstreamcreds.Cache`) — chosen over live per-call Secret reads (avoids
   per-call latency) and over a K8s watch/informer (unnecessary
   complexity for how rarely credentials rotate). `Reload(ctx, apps)`
-  rebuilds the whole cache from the currently known app list every call,
-  so deregistered/renamed apps' stale entries are dropped automatically.
+  rebuilds the whole cache from the supplied app list every call,
+  so deregistered/renamed apps' stale entries are dropped on the next
+  successful reload, not automatically on informer events.
   Exposed as one admin-tier MCP tool, **`reload_cache`** — no scoping
   parameters in v1.
-- **Only `get` RBAC, never `list`/`watch`**, on Secrets — since app
-  instance names are already known from `discovery.Table.List()`, the
+  Startup reloads after discovery sync; `reload_cache` takes a fresh
+  persisted ConfigMap snapshot so it need not wait for informer events.
+  Registration and Secret edits do not reload credentials implicitly.
+  Read errors or missing configured native credentials fail the reload
+  atomically, retaining the previous snapshot; an initial failure
+  prevents startup.
+- **Upstream-cache reads need only `get`, never `list`/`watch`**, on Secrets —
+  app names are known from discovery or its persisted snapshot, so the
   cache resolves exactly which two Secret names to fetch per app without
   needing a label convention or broader read access.
 - **Credential binding is a single resolved string, not the full
@@ -416,11 +409,14 @@ through a dedicated design conversation. Final design:
   upstream credentials (e.g. OAuth id+secret pairs) are an accepted v1
   limitation — combine into one string and parse in the template if
   needed.
-- **Fail-open on missing credentials**: an unprovisioned or missing
+- **Legacy mapped-tool fallback on missing credentials**: an unprovisioned or missing
   credential resolves to `""`, passed straight through to the backend
   call. The backend's own auth rejection is the error signal, surfaced to
   the caller as a normal tool-call error — no special "credential
-  missing" branch anywhere in mcp2rest.
+  missing" branch in this mapped-tool path. This is **not** the native
+  endpoint policy: a configured native credential is required on reload
+  and forwarding; missing/invalid values do not fall back to anonymous
+  forwarding. Kubernetes API access errors are reload errors in both modes.
 - **Passthrough auth convention (new gap, discovered during this design
   pass)**: `internal/passthrough/relay.go` had *no* auth-injection
   mechanism at all. Resolved: a fixed bearer-scheme Authorization
@@ -428,7 +424,12 @@ through a dedicated design conversation. Final design:
   `http.Client` (the Go MCP SDK's `StreamableClientTransport` has no
   native `Headers` field). No per-app configurable auth scheme in v1.
 
-### 3.9 `get_key` admin tool — narrow exception to "hlctl never touches raw key material" (added 2026-10-02, RESOLVED)
+### 3.9 `get_key` admin tool — delivery rationale and later persistence revision
+
+**Historical motivation (2026-10-02):** the first implementation used
+raw arrays and resolved tiers using the live in-memory store. The
+following config-templating constraint explains why `get_key` was added;
+that raw-array implementation is no longer the storage contract.
 
 `homelab-api2mcp#2` flagged that `keys.json` (the per-instance key Secret,
 §3.3/Open Decision 6) stores raw keys as a flat `[]string` with no
@@ -446,28 +447,25 @@ same pattern Hermes already uses for `provisionMcpServer`) genuinely
 cannot "mount the Secret and read it themselves" the way an agent's own
 long-running container can.
 
-**Resolved**: rather than changing `keys.json`'s shape (which would
-matter only if hlctl started reading Secrets directly — requiring new,
-broad K8s RBAC for hlctl to read arbitrary agent-namespace Secrets, the
-exact privilege-creep Open Decision 6 was written to avoid), mcp2rest
-gained a new admin-scoped management tool: **`get_key(agentInstance,
+**Resolved at the time**: mcp2rest gained an admin-scoped management tool:
+**`get_key(agentInstance,
 namespace, tier) → rawKey`**. hlctl (already an MCP client for
 `register_app`) calls this with its own bootstrap key when it needs a
 literal credential value for a config-templated hook like OpenClaw's.
 
-This is a **narrow, explicit exception** to "hlctl never touches raw key
-material" — not a reversal of it. The exception is scoped to exactly
-this documented need (config-templated MCP client registration with no
-secret-ref mechanism of its own); hlctl still does not receive or store
-keys for the normal case (an agent instance's own long-running
-container, which still gets its key via the Secret mcp2rest writes into
-its namespace, per §3.3/Open Decision 6, unchanged). `keys.json`'s shape
-is unchanged — `get_key` resolves tier server-side by cross-referencing
-the Secret's raw array against mcp2rest's own in-memory key store (the
-same resolution `ensureTierKey`/`appendTierKey` already perform
-internally), so no Secret-format migration was needed.
+**Current implementation:** hlctl-owned delivery is the general
+contract, not just a config-templating exception. `get_key` resolves the
+namespace-qualified identity/tier from the gateway's persisted,
+versioned `keys.json` document and reconciles the local verification
+index (`keys.AgentKeys.Get`). `create_key` and `rotate_key` also return
+raw material to their admin caller; listing returns metadata only.
+Legacy raw-only Secrets cannot safely recover authorization metadata and
+require reissuance/re-delivery. Do not copy their array positions into a
+new document or grant inferred tiers. This replaces the earlier
+"no format migration needed" conclusion while preserving its original
+reason for avoiding arbitrary agent-namespace Secret reads.
 
-## 4. Open Decisions — confirm before/at implementation kickoff
+## 4. Decision history — resolutions and implementation corrections
 
 Flagging these explicitly rather than assuming, matching this org's own
 "resolve before implementation, don't re-litigate per PR" convention
@@ -480,11 +478,15 @@ Flagging these explicitly rather than assuming, matching this org's own
    `cluster.yaml` allow-list needed. `admin`-tier keys still require an
    **explicit grant** (not auto-granted to anything) — see Open
    Decision 5 for who/how that's requested. No new `cluster.yaml` schema
-   needed for this; `hlctl` simply requests a `user`-tier key for every
-   authorized agent instance at registration time.
+   needed for this. **Implementation boundary:** the gateway only ensures
+   keys for the supplied `authorizedAgents`; it does not enumerate every
+   agent or maintain per-app grants. Each supplied tier defaults to
+   `user` but may explicitly be `admin`. Downstream selection of agents
+   is not verified here.
 2. ~~Scope granularity in v1~~ — **RESOLVED 2026-09-30**, see §3.2: a
-   key is issued as `user` or `admin` per app (`admin` implies `user`);
-   full custom per-tool ACLs remain a Phase-2 refinement.
+   key is issued as `user` or `admin` per namespace-qualified agent
+   (`admin` implies `user`). The original per-app grant distinction was
+   not implemented; full custom per-tool ACLs remain deferred.
 3. ~~Where does the proxy itself deploy from?~~ — **RESOLVED 2026-09-30**:
    `homelab-api2mcp` is containerized and published as a **public GHCR
    image** built by its own repo's CI/CD — the exact same distribution
@@ -500,7 +502,8 @@ Flagging these explicitly rather than assuming, matching this org's own
    Deployment/Service/Ingress/RBAC" provisioning step, mirroring
    `EnsureMCPServer`'s own shape, rather than going through the
    `custom-helm` catalog-app install path Hub uses — since mcp2rest has no
-   per-user Helm values to configure.)
+   per-user Helm values to configure.) This records the downstream
+   provisioning intent, not verified current `homelab` behavior.
 4. ~~Key rotation/revocation lifecycle.~~ — **RESOLVED 2026-09-30**:
    manual-only for v1 — issue-once + manual revoke via mcp2rest's own
    `revoke_key` MCP tool (talk to an admin-scoped agent). Automatic
@@ -509,66 +512,56 @@ Flagging these explicitly rather than assuming, matching this org's own
    first and hardening once real usage is known (§5 of the same decision
    doc).
 5. ~~Who holds the "admin" scope for mcp2rest's management tools?~~ —
-   **RESOLVED 2026-09-30: the human cluster admin only** — not the
-   Cluster Agent singleton (rejecting the earlier recommendation). At
-   bootstrap (mcp2rest's first deploy as a platform service, Open
-   Decision 3), mcp2rest mints exactly **one** admin-scope key and
-   surfaces it out-of-band to the person running the install (mirrors
-   `kubeadm`-style one-time bootstrap-token delivery — printed once at
-   install time / written to a Secret only the installing operator's own
-   kubeconfig can read), rather than writing it into any agent instance's
-   namespace the way per-app `user`/`admin` keys are (§3.3). The cluster
-   admin then drives mcp2rest's management tools (`register_app`,
-   `create_key`, `revoke_key`, the `skills` write tools, etc.) from
-   whatever agent/tool session they personally use — this CLI, `hlctl`,
-   or any other MCP client they authenticate with that key. No other
-   identity (Cluster Agent included) is auto-granted admin scope; if the
-   admin later wants the Cluster Agent to perform admin-tier actions on
-   its behalf, that's a distinct, explicit future decision (handing the
-   Cluster Agent the admin key, or minting it a second admin-scope key),
-   not something this plan does by default. `hlctl`'s own separate
-   narrower bootstrap key (registration-only, scoped to just
-   `register_app`/`deregister_app` for its one deploy-time call, §3.1) is
-   unaffected by this — it remains a distinct, lower-privilege credential
-   from the human admin's full admin-scope key.
-6. **Secret-write privilege scope.** mcp2rest now needs **write** access
-   to Secrets in every agent namespace (not just read/list like
-   `hlctl-skill-reader`) — a real privilege increase worth a dedicated
-   security note, not just an RBAC afterthought. **RESOLVED 2026-09-30:
-   broad ClusterRole** (ship simple now, harden later) — rather than
-   dynamically provisioning a per-namespace Role/RoleBinding at
-   registration time (rejected as unnecessary moving parts for v1, since
-   Kubernetes RBAC can't restrict by Secret *name* pattern anyway, only by
-   namespace/label). Concretely: one ClusterRole granting
-   create/update/get on Secrets, scoped to namespaces already carrying an
-   agent-instance label (not truly cluster-wide-unscoped), bound to
-   mcp2rest's ServiceAccount. Secrets are named `<agent-instance>-mcp2rest-keys`
-   (not `<app>-mcp2rest-keys`, per §3.3's per-instance key model) —
-   revisit toward per-namespace least-privilege once real usage is known
-   (mirrors §5's own "ship working, harden later" precedent).
+   **Original resolution (2026-09-30), superseded in mechanism:** keep
+   bootstrap privileged material out of automatic agent delivery; the
+   mint-and-print suggestion borrowed kubeadm's one-time-token model,
+   with a separate narrow hlctl credential proposed for registration.
+   **Implemented:** create/load `mcp2rest-bootstrap-admin` in the gateway
+   namespace and restore it before listening; never print it. hlctl
+   retrieves this **full-admin** key using Kubernetes credentials.
+   There is no registration-only tier or separate management admin
+   scope. Explicit admin-tier agent keys also authorize management, so
+   the original "human only" restriction is not enforced by a distinct
+   identity class. The bootstrap key itself is not automatically
+   delivered to agents. Use README's retrieval/regeneration contract,
+   not the historical print-on-install proposal.
+6. **Secret-write privilege scope — revised after persistence.**
+   The initial design traded least privilege for simpler cross-namespace
+   delivery, proposing a broad Secret-writing ClusterRole. The claimed
+   namespace-label restriction was not a capability of Kubernetes RBAC:
+   labels cannot constrain a ClusterRoleBinding's namespace scope.
+   Namespaced RoleBindings can bind a ClusterRole within individual
+   namespaces, but no label-filtered Secret permission exists.
+   **Implemented:** gateway-owned agent records use the gateway namespace
+   only (`agent-keys-role.yaml`: get/list/create/update); bootstrap uses
+   `bootstrap-role.yaml`; upstream credentials use get-only
+   `upstream-creds-role.yaml`. The gateway no longer needs Secret writes
+   into agent namespaces. The remaining
+   `keys-secrets-clusterrole.yaml` is a legacy direct-delivery artifact,
+   not current setup guidance; hlctl owns any delivery-side RBAC.
 7. ~~Where does the mcp2rest usage Skill live?~~ — **RESOLVED
    2026-09-30**, see §3.7: `homelab-api2mcp` ships its own Skill CRD
    source alongside its deployment manifests; it's applied at deploy time
    like any other Skill and read back via mcp2rest's own `list_skills`/
    `get_skill` tools — no new platform-skill directory convention needed.
 8. ~~Privilege note on `all-skills-any-key`~~ — **confirmed 2026-09-30,
-   no change.** Any authenticated key — not just admin-tier or
-   Cluster-Agent-equivalent — can read any Skill cluster-wide via the
-   built-in skills tool, regardless of which apps that key is otherwise
-   scoped to. Deliberate breadth-over-least-privilege choice (some
-   Skills, e.g. an app's `security`/`authentication` topic, may contain
+   revised in Phase 25.** Any authenticated key can still read any Skill
+   cluster-wide through `/mcp`; mapped app routes now expose only their
+   own plus global Skills, and native routes inject none (§3.4).
+   The original breadth-over-least-privilege choice acknowledged that
+   some Skills, e.g. an app's `security`/`authentication` topic, may contain
    more operational detail than a narrowly-scoped per-user agent strictly
-   needs). Recorded, not re-litigated — revisit only if real usage
-   surfaces a problem, same "ship working, harden later" posture as
-   item 6.
+   needs. Real usage later motivated app-session filtering; that
+   filtering is not an app ACL or an admin-only management read policy.
 9. ~~Per-tool upstream credential storage/injection (homelab-api2mcp#1).~~
-   — **RESOLVED, implemented**, see §3.8 for the full design: one Secret
-   per app instance (native multi-key `Secret.data`, two Secrets —
+   — **RESOLVED, implemented**, see §3.8 for the full design: two Secrets
+   per app instance (native multi-key `Secret.data` —
    `<app-instance>-api-keys`/`<app-instance>-mcp-keys` — written directly
    by `hlctl` into mcp2rest's namespace), `get`-only RBAC, full in-memory
    preload with a manual `reload_cache` admin tool, a single resolved
-   `{{ credential }}` Liquid binding per tool call, and fail-open (empty
-   string) when a credential is missing.
+   `{{ credential }}` Liquid binding per mapped tool call, and empty
+   string fallback for missing mapped-tool credentials. Native endpoints
+   require any explicitly configured upstream credential.
 
 ## 5. Architecture
 
@@ -578,21 +571,25 @@ Flagging these explicitly rather than assuming, matching this org's own
   `github.com/osteele/liquid` (same library `hlctl` already depends on, for
   consistent templating semantics across the platform).
 - **Single MCP (Streamable HTTP) surface — no separate admin REST API.**
-  Three tool namespaces on `POST /{app-instance}/mcp`:
+  Management and Skill tools on `/mcp`; app-specific tools on
+  `/{app-instance}/mcp`, not one combined inventory:
   - **Per-app proxied tools** — the regular case, one tool set per
-    registered app instance, Bearer-key authenticated, scope-checked
-    against both the app-instance in the path and the key's `user`/`admin`
-    tier (§3.2). Manifests may declare a tool as `type: passthrough`
+    registered app instance, Bearer-key authenticated and tier-checked
+    (§3.2); there is no per-key app allow-list. Manifests may declare a
+    tool as `type: passthrough`
     (§3.5) to relay directly to an app's own MCP server instead of
     rendering Liquid templates.
-  - **Built-in `skills` tools** (§3.4) — `list_skills`/`get_skill` (any
-    key), `create_skill`/`update_skill`/`delete_skill` (admin scope).
+  - **Built-in `skills` tools** (§3.4) — management reads (any valid
+    key), management writes (admin tier), app-scoped reads on locally
+    defined app routes only.
   - **Reserved management tools** on mcp2rest itself (`register_app`,
     `deregister_app`, `list_apps`, `create_key`, `list_keys`, `revoke_key`,
-    `rotate_key`, `get_manifest`), gated by an **admin** scope. mcp2rest
-    mints keys, owns them end-to-end, and **writes the Secret directly
-    into the authorized agent instance's own namespace** itself —
-    `hlctl` is never handed raw key material.
+    `rotate_key`, `get_key`, `reload_cache`, `get_manifest`), gated by
+    **admin** tier. mcp2rest persists namespace-qualified agent records
+    in its own namespace; hlctl retrieves and delivers credentials.
+  - A manifest with no tools and `upstreamMCPURL` instead selects
+    **transparent native HTTP forwarding**, bypassing the local SDK
+    inventory, Skill injection and mapped-tool pipeline (§3.5).
 - **Keys are minted per agent *instance*** (§3.3), not per role/app — the
   render context passed to `request.liquid` includes a `caller` object
   (`{agentInstance, username, tier, appInstance}`) so multi-user apps
@@ -601,29 +598,58 @@ Flagging these explicitly rather than assuming, matching this org's own
 - **Routing table**: in-memory, keyed by app-instance → tool set; built
   from a K8s informer over ConfigMaps labeled
   `mcp2rest.homelab.dev/app=<name>` (list on startup, watch for updates),
-  and updated synchronously the moment `register_app` is called.
+  and updated by informer events after registration upserts its ConfigMap.
+  Routing names are global, not namespace-qualified.
 - **Request pipeline** (ordered, named stages, each independently
-  swappable/insertable later, and designed to be **WASM-loadable** so a
+  swappable/insertable later, with **future WASM extensibility intended** so a
   future stage can be a sandboxed 3rd-party plugin without a rewrite,
-  §3.6): `authn → authz(scope+tier) → tool-resolve → render(request.liquid)
+  §3.6): `authn → authz(tier) → tool-resolve → render(request.liquid)
   → upstream HTTP call (with injected credential) → render(response.liquid)
   → respond`. v1 governance-adjacent stages (logging/metrics) are
   pass-through observability only. Passthrough-mode tools skip the two
-  `render(...)` stages and relay directly to the upstream MCP server.
+  Liquid executions and relay the selected tool call. Native endpoints use the
+  separate HTTP proxy, not this pipeline.
 - Structured stdout logging + `/metrics` (Prometheus) — fits the existing
   observability convention (every workload's logs/metrics are scraped the
   same way, per §2.10 of the decision doc).
-- Distroless image, single static binary, minimal resource requests
-  (mirrors `kubernetes-mcp-server`'s `25m`/`64Mi` baseline in
-  `mcpserver.go`).
-- K8s manifests: Deployment (2+ replicas), ClusterIP Service, Ingress at
-  `mcp2rest.<dns.zone>`, and RBAC covering: (a) read/watch ConfigMaps
-  across namespaces by label (mirrors `hlctl-skill-reader`), (b) read (and,
-  for admin calls, write) `Skill` CRDs cluster-wide (§3.4), and (c) write
-  access to Secrets named `<agent-instance>-mcp2rest-keys`, restricted to
-  namespaces already carrying an agent-instance label (Open Decision 6).
+- Distroless image and single static binary. The original resource target
+  borrowed `kubernetes-mcp-server`'s `25m`/`64Mi` baseline; workload
+  resource settings are downstream, not supplied by this repo.
+- This repo ships **RBAC and observability manifests**, not a
+  Deployment/Service/Ingress bundle. Downstream provisioning owns those
+  resources and should run **one active replica**. Supplied RBAC covers
+  read-only ConfigMap discovery, Skill reads/writes, and gateway-
+  namespace credential access. Registration additionally needs ConfigMap
+  create/update/delete permissions provisioned downstream; those writes
+  are not granted by `discovery-clusterrole.yaml`.
+  Discovery's label selector is application
+  filtering, not an RBAC-enforced label restriction (Open Decision 6).
+
+### Implemented state ownership
+
+```mermaid
+flowchart LR
+    P["Provisioner / hlctl"] -->|"register_app manifest"| G["Gateway startup + management"]
+    G -->|"upsert registration"| C["App-namespace ConfigMaps"]
+    C -->|"list / watch"| R["Process-local routing table"]
+    G -->|"persist lifecycle changes"| K["Gateway-namespace bootstrap + agent Secrets"]
+    K -->|"restore before HTTP startup"| V["Process-local verification index"]
+    G -->|"create_key / get_key / rotate_key"| P
+    P -->|"deliver credential"| H["Agent harness configuration"]
+    P -->|"upsert upstream credentials"| U["Gateway-namespace api-keys / mcp-keys"]
+    U -->|"startup / explicit reload_cache"| S["Process-local upstream credential cache"]
+```
+
+Persistence and informer discovery are distinct: neither agent-key
+Secrets nor upstream-credential Secrets have a live cache watch. The
+diagram is an ownership contract, not evidence that downstream rollout
+has completed.
 
 ### 5.2 `homelab` (`hlctl`) changes
+
+**Downstream integration contract, not verified implementation status.**
+Package names below preserve the original proposal; see `tasks.md` for
+historical issue references and the runtime contract for current payloads.
 
 - New `app.yaml` schema block `mcpTools:` (path to a manifest describing
   tools/tiers/passthrough-vs-rendered + `maps/mcp/**/request.liquid` /
@@ -633,15 +659,16 @@ Flagging these explicitly rather than assuming, matching this org's own
   authoring mistakes fail fast, before any deploy.
 - Deploy-time wiring (mirrors `cluster_agent_reconcile.go`'s
   `EnsureMCPServer` call): after a successful app install, build/update the
-  app's ConfigMap, then call mcp2rest's `register_app` MCP tool **once per
-  authorized agent instance** (§3.3 — not once per app) via a small typed
-  JSON-RPC helper — `hlctl` acting as a minimal, single-purpose MCP client,
-  authenticated with its own bootstrap/admin key — passing the current
-  set of authorized agent instances (per-app `user`-tier keys are
-  auto-granted to every agent instance per Open Decision 1 — no
-  `allowedApis` allow-list needed). `hlctl` does **not** receive or store
-  any per-agent key — mcp2rest mints and delivers those itself, directly
-  into that instance's namespace.
+  registration payload, then call mcp2rest's `register_app` MCP tool for
+  the app, supplying an `authorizedAgents` array via a typed
+  JSON-RPC helper authenticated with the persistent full-admin bootstrap
+  key. The original intent was automatic user-tier provisioning for all
+  agent instances (Open Decision 1); the gateway only processes supplied
+  entries, not an `allowedApis` allow-list. mcp2rest upserts the
+  ConfigMap and ensures keys; hlctl obtains raw keys through management
+  tools and owns harness configuration/agent-namespace delivery.
+  Upstream Secrets must be provisioned separately, followed by
+  `reload_cache` after registration or credential changes.
 - No new `cluster.yaml` block needed for per-app grants — Open Decision 1
   resolved to auto-grant `user`-tier keys to every agent instance.
 - No new `hlctl mcp2rest key` CLI — dropped in favor of mcp2rest's own
@@ -652,6 +679,8 @@ Flagging these explicitly rather than assuming, matching this org's own
   `docs/decisions/mcp2rest.md` capture doc (this org's own convention).
 
 ### 5.3 `homelab-catalog` changes
+
+**Historical rollout proposal, not a current catalog audit.**
 
 - Apps opt in with `mcpTools:` + `maps/mcp/**` in their own directory —
   same authoring shape as `providerMap`/`maps/*.liquid` today.
@@ -673,11 +702,13 @@ Flagging these explicitly rather than assuming, matching this org's own
   human/agent-readable documentation and a fallback for any endpoint not
   yet wrapped as an MCP tool.
 - **Does** replace raw curl-with-admin-credential access for any endpoint
-  wrapped as an MCP tool: narrower, schema-checked, and — via per-agent
-  scoped keys — no longer requires handing an agent the app's full
+  wrapped as a mapped MCP tool: schemas and tool tiers can narrow the
+  exposed operations, and gateway keys avoid handing an agent the app's full
   admin-level credential. This directly addresses the "app credential
   scope-down" hardening item this org already flagged as future work
-  (§2.8/§5 of the existing decision doc).
+  (§2.8/§5 of the existing decision doc). This does not imply per-app
+  gateway key ACLs, independently verified end-user identity, or local
+  per-tool enforcement on transparent native endpoints.
 - `EnsureMCPServer`/`kubernetes-mcp-server` (the Cluster Agent's own
   K8s-introspection MCP server) is unaffected and separate — that is
   cluster-control-plane access; mcp2rest is app-REST-API access.
@@ -690,6 +721,12 @@ integration with a later phase to prove itself. Phases are numbered in
 dependency order; a phase's "Depends on" lists strict prerequisites. This
 replaces the earlier coarse Phase 1-5 grouping with something granular
 enough to track in `tasks.md`.
+
+These are delivery goals, **not completion claims or setup steps**.
+`tasks.md` records partial/deferred acceptance and subsequent phases
+16–25 plus persistence/native-endpoint follow-ups. For example, a local
+fake-client test is not evidence that a cluster pilot, platform
+provisioning or live scrape has completed.
 
 - **Phase 0 — Repo scaffolding.**
   - *Goal*: `homelab-api2mcp` exists as a buildable, lintable, CI-checked
@@ -752,14 +789,15 @@ enough to track in `tasks.md`.
 
 - **Phase 5 — Key issuance + per-instance Secret delivery.**
   - *Goal*: replace Phase 3's hardcoded keys with real per-agent-instance
-    key minting, storage, and delivery as a Secret
-    (`<agent-instance>-mcp2rest-keys`) written into that instance's own
-    namespace.
-  - *Deliverables*: `internal/keys` (mint/store/revoke), Secret-write
-    RBAC (Open Decision 6: namespace-label-scoped ClusterRole).
-  - *Test/acceptance*: integration test proves a minted key's Secret lands
-    in the correct namespace with the correct name, and that key
-    authenticates successfully against Phase 3's authz stage.
+    key minting and durable namespace-qualified records in gateway-owned
+    Secrets. Original direct-to-agent delivery is superseded; hlctl owns
+    harness delivery.
+  - *Deliverables*: `internal/keys` repository, own-namespace
+    `agent-keys-role.yaml`, startup restoration.
+  - *Test/acceptance*: fake-client tests cover restart, namespace/tier
+    identity, lifecycle changes, invalid data and failed writes; keys
+    authenticate against the runtime. No cross-namespace writer grant
+    is required by this repository.
   - *Depends on*: Phase 4.
 
 - **Phase 6 — Management tool set + human-admin bootstrap.**
@@ -818,7 +856,9 @@ enough to track in `tasks.md`.
   - *Goal*: `homelab`'s `hlctl` gains the `mcpTools:` app.yaml schema
     block, `internal/mcpproxy` (render/validate at `app validate` time),
     and the minimal MCP/JSON-RPC client that calls `register_app`/
-    `deregister_app` at deploy time using its own narrow bootstrap key.
+    `deregister_app` plus key retrieval and `reload_cache` at deploy time
+    using the persisted **full-admin** bootstrap key. The originally
+    proposed narrow registration credential does not exist.
   - *Deliverables*: schema change, `internal/mcpproxy`, deploy-step wiring
     (mirrors `EnsureMCPServer`'s call shape).
   - *Test/acceptance*: `hlctl app validate` fails fast on a malformed
@@ -880,27 +920,34 @@ enough to track in `tasks.md`.
     the `wazero` loader).
   - Automatic key rotation (Open Decision 4 — manual only in v1).
   - Per-(app, user) credential storage for multi-user apps that can't use
-    impersonation (§3.3 Phase-2 candidate).
+    impersonation (§3.3, deferred future work).
   - Full per-tool ACLs beyond the two-tier user/admin split (§3.2
-    Phase-2 candidate).
+    deferred future work).
 
-## 8. Explicit non-goals for this plan
+## 8. Explicit non-goals / still deferred
 
-- No implementation in this pass — this is the feasibility/architecture
-  plan only.
-- No decision on automatic key rotation (Open Decision 4).
+- The original planning pass made no code changes; implementation has
+  since shipped in this repo. This document refresh is documentation only.
+- No automatic key rotation (Open Decision 4 resolved manual-only).
 - No full per-tool ACLs beyond the two-tier user/admin split (§3.2 —
-  Phase 2+ candidate).
-- No per-(app,user) credential storage for multi-user apps (§3.3 — Phase 2
+  future candidate, not numbered delivery Phase 2).
+- No per-(app,user) credential storage for multi-user apps (§3.3 — future
   candidate); apps requiring true per-user tokens are out of scope until
   then.
-- No real governance/policy logic or WASM plugin loader (Phase 5).
+- No real governance/policy logic or WASM plugin loader/ABI (Phase 15).
+- No live multi-replica key/cache coordination or distinct registration-
+  only bootstrap credential.
 - No retiring of the Cluster Agent's existing direct `Skill` CRD RBAC
   (§3.4's "replaces" direction is recorded intent, not executed here).
 
-## 9. Supporting artifacts (added 2026-09-30)
+## 9. Supporting artifacts (historical planning inventory, 2026-09-30)
 
 Alongside this plan, three supporting artifacts were drafted for review:
+
+The session-workspace paths below are provenance, not current setup
+locations. The committed tracker is now [tasks.md](../../tasks.md),
+contributor instructions are `.github/copilot-instructions.md`, and
+the required authoring skills are under `.github/skills/`.
 
 - **`tasks.md`** (session workspace `files/tasks.md`) — a per-phase task
   checklist mirroring §7, with a status column. This is the working
@@ -926,5 +973,5 @@ Alongside this plan, three supporting artifacts were drafted for review:
     distroless/minimal images, non-root, no-baked-secrets, adapted from
     Docker's own published best practices.
 
-All four files are drafts awaiting your review/adjustment before being
-placed into the actual `homelab-api2mcp` repo.
+The draft/review wording above describes the original planning session;
+it does not mean these committed artifacts are still awaiting placement.

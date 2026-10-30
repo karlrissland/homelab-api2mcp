@@ -28,7 +28,8 @@ func NewSecretWriter(client kubernetes.Interface) (*SecretWriter, error) {
 	return &SecretWriter{client: client}, nil
 }
 
-// SecretName returns the per-instance Secret name mandated by the Phase 5 plan.
+// SecretName returns the legacy per-instance delivery Secret name.
+// Authoritative namespace-qualified agent records use AgentSecretName instead.
 func SecretName(agentInstance string) string {
 	return fmt.Sprintf("%s-mcp2rest-keys", agentInstance)
 }

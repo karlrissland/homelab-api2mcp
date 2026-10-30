@@ -157,64 +157,83 @@ func (h *runtimeHandler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // immediately understand this is the wrong endpoint for that.
 const managementInstructions = `You are connected to mcp2rest's MANAGEMENT endpoint (/mcp), not a proxied app.
 
-mcp2rest is a shared REST-to-MCP proxy for homelab apps. This endpoint only
+mcp2rest is a shared REST/MCP gateway for homelab apps. This endpoint only
 exposes mcp2rest's own control-plane tools (register_app, deregister_app,
-list_apps, get_manifest, create_key, list_keys, revoke_key, rotate_key) plus
-the built-in Skill documentation tools (list_skills, get_skill, and -- admin
-tier only -- create_skill/update_skill/delete_skill). These tools manage
-mcp2rest itself and other apps' registrations; they do NOT call any app's
-actual REST API.
+list_apps, get_manifest, create_key, list_keys, get_key, revoke_key,
+rotate_key, reload_cache) plus the built-in Skill documentation tools
+(list_skills, get_skill, create_skill, update_skill, delete_skill).
+These tools do NOT call a registered app's actual API.
 
-Most management tools require an admin-tier API key.
+ALL management calls require an admin-tier gateway API key, including
+list_apps and get_manifest. Skill reads accept any valid user/admin key;
+Skill writes require admin. These tools are listed even when a caller
+cannot use them: discovery is not authorization. There is no separate
+proxy-admin scope, and gateway keys are not restricted to individual apps.
 
-To actually call a registered app's real tools (e.g. a download, a query, a
-write to that app's own API), connect to that app's OWN endpoint instead:
-  https://mcp2rest.<dns-zone>/{app-name}/mcp
-(the app-name used is the one shown by list_apps or get_manifest).
+Generic list_skills/get_skill read Skills cluster-wide. Use a returned
+resource's name and namespace with get_skill; skillName is not its identity.
 
 Workflow for onboarding a new app's tools into an agent harness:
- 1. Call list_apps (admin key) or get_manifest(app) here to see what apps
-    exist and their declared tools/schemas.
+ 1. With an admin key, call list_apps({}) or
+    get_manifest({"appName":"<registered-name>"}). These return registration
+    metadata, not an API key. A native registration has no declared tools;
+    discover its tools on the app endpoint instead.
  2. Configure your MCP client/harness with a NEW server entry pointing at
-    https://mcp2rest.<dns-zone>/{app-name}/mcp, authenticated with a
-    per-agent-instance key issued by mcp2rest and delivered by hlctl.
-    Authoritative keys live in the gateway namespace; hlctl configures
-    the harness's bearer header or a Secret in the agent's namespace.
- 3. Reconnect/add that server in your harness -- get_manifest alone does
-    not register or add anything automatically; there is no MCP
-    self-registration mechanism.`
+    the returned mcpInternalUrl for in-cluster access. Otherwise combine
+    mcpEndpointPath (/{app-name}/mcp) with your operator-supplied gateway
+    base URL. Authenticate with Authorization: Bearer <your-agent-key>.
+    Authoritative agent keys persist in the gateway namespace; hlctl/the
+    provisioner delivers the harness credential or agent-namespace copy.
+    Gateway keys are distinct from server-owned upstream credentials.
+ 3. Initialize the new app connection, call tools/list, and use its exact
+    tool names and schemas in tools/call. get_manifest does not add a
+    connection or make app tools callable on this management session.
+
+Declared app routes enforce per-tool user/admin tiers and add app/global
+Skill reads. Native routes authenticate a valid gateway key but relay the
+upstream MCP surface without gateway per-tool tier checks or injected Skill
+tools; upstream permissions depend on the server-owned upstream credential.`
 
 // appInstructions is sent as this session's MCP `instructions` field when
-// connecting to one specific registered app's proxied path
-// (/{app-name}/mcp). Keep this generic/app-name-driven -- never special-
-// cased to any one app -- since every registered app shares this same
-// runtime path.
+// connecting to one registered app's declared-tool path (/{app-name}/mcp).
+// Native endpoint routes bypass this server and retain upstream instructions.
 func appInstructions(appName string) string {
 	slug := skillstools.ToolNameSlug(appName)
 	listSkillsTool := fmt.Sprintf("list_%s_skills", slug)
 	getSkillTool := fmt.Sprintf("get_%s_skill", slug)
-	return fmt.Sprintf(`You are connected to mcp2rest's proxy for the %q app (not mcp2rest itself).
+	return fmt.Sprintf(`You are connected to mcp2rest's declared-tool proxy for the %q app (not mcp2rest itself).
 
-mcp2rest is a shared REST-to-MCP proxy: every tool listed in this session's
-tools/list is a real call into %q's own REST API, rendered through that
-app's Liquid request/response templates -- not a tool belonging to mcp2rest
-generically. Tool names, parameters, and behavior are specific to %q; they
-do not apply to any other app registered with mcp2rest.
+This session exposes declared tools for %q, plus gateway Skill read tools.
+Rendered tools call %q's REST API through Liquid request/response templates;
+individually declared passthrough tools instead call an upstream MCP tool.
+Use tools/list and the advertised input schemas rather than guessing names.
 
 This session also exposes read-only Skill documentation tools named %s and
-%s (note: named after %q, not the generic list_skills/get_skill used on
-mcp2rest's management endpoint -- do not confuse the two) scoped to %q's
-own Skills (plus any cluster-wide Skills not owned by a specific app) --
-useful for background/API documentation about %q itself, not for calling
-%q's actual tools. Skills belonging to other apps are not visible on this
-session; use mcp2rest's management endpoint for cluster-wide Skill
-visibility and the generic list_skills/get_skill tool names.
+%s (derived from %q, not the generic list_skills/get_skill names used on
+the gateway management endpoint). They show Skills labeled
+skills.homelab.dev/app=%q plus global Skills with no app label, across
+namespaces; another app's Skills are hidden. Use these for documentation
+about %q, not to perform app actions. Pass a listed resource's name and
+namespace to the get tool. Both Skill tools require a valid gateway key
+even though their names remain visible without one.
 
-Only tools your API key's tier (user or admin) is authorized for are
-listed here; calling an unlisted/unauthorized tool name will be rejected.
-Each app has its own tool set and its own endpoint path
-(https://mcp2rest.<dns-zone>/{app-name}/mcp) -- tools from other apps are
-never available on this session.`, appName, appName, appName, listSkillsTool, getSkillTool, appName, appName, appName, appName)
+For %q's actual app actions, only declared tools allowed by your gateway
+key's user/admin tier appear in tools/list. Calling a declared admin tool
+with a user key is rejected before upstream execution. Gateway keys are
+agent-scoped, not app-scoped; the same admin tier also grants management
+access on /mcp. No management or Skill write tools are provided here.
+
+Rendered results are text; upstream HTTP 400+ sets isError. Declared MCP
+passthrough flattens upstream content to text and does not preserve its
+isError flag, so inspect content as well as errors before assuming success.
+The optional __mcp2rest_caller_username argument is caller-supplied, not
+verified end-user identity; it must be permitted by the tool schema and
+is stripped before template/relay arguments are passed upstream.
+
+Connect to a different app's own endpoint to discover its tools.
+Whole native MCP endpoint registrations are a different
+mode: they retain upstream instructions/tools and do not inject these
+gateway Skill tools or enforce declared-tool tier filtering.`, appName, appName, appName, listSkillsTool, getSkillTool, appName, appName, appName, appName)
 }
 
 func (h *runtimeHandler) serverForRequest(req *http.Request) *mcp.Server {

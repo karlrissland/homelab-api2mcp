@@ -7,8 +7,8 @@ import (
 
 // NewAuthorizationStage builds the authz stage.
 //
-// Phase 3 enforces only the per-tool user/admin tier split. Wider
-// per-app or management-scope authorization arrives in later phases.
+// It enforces the declared tool's user/admin tier, not a per-key app allowlist.
+// Management authorization is handled separately by internal/adminapi.
 func NewAuthorizationStage() Stage {
 	return NewStage(authzStageName, func(_ context.Context, call *CallContext) error {
 		if !call.Caller.Tier.Valid() {
