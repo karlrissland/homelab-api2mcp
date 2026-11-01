@@ -10,8 +10,11 @@
 package manifest
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
+
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // Tier is the authorization level required to call a tool, or held by a
@@ -71,6 +74,11 @@ type Tool struct {
 	Type ToolType `json:"type"`
 	// InputSchema is the JSON Schema for the tool's parameters.
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	// ResponseSchema optionally validates the upstream JSON body before
+	// response rendering. It applies only to rendered tools.
+	ResponseSchema map[string]any `json:"responseSchema,omitzero" yaml:"responseSchema"`
+
+	responseValidator *jsonschema.Resolved
 
 	// RequestTemplate and ResponseTemplate are Liquid template source,
 	// required when Type == ToolTypeRendered.
@@ -113,7 +121,8 @@ func (t Tool) EffectiveUpstreamMCPURL(a App) string {
 }
 
 // Validate reports a descriptive error if t is not well-formed.
-func (t Tool) Validate() error {
+func (t *Tool) Validate() error {
+	t.responseValidator = nil
 	if t.Name == "" {
 		return fmt.Errorf("tool: name is required")
 	}
@@ -126,11 +135,124 @@ func (t Tool) Validate() error {
 			return fmt.Errorf("tool %q: rendered tools require requestTemplate and responseTemplate", t.Name)
 		}
 	case ToolTypePassthrough:
+		if t.ResponseSchema != nil {
+			return fmt.Errorf("tool %q: responseSchema is only supported for rendered tools", t.Name)
+		}
 		if t.UpstreamToolName == "" {
 			return fmt.Errorf("tool %q: passthrough tools require upstreamToolName", t.Name)
 		}
 	default:
 		return fmt.Errorf("tool %q: invalid type %q", t.Name, t.Type)
+	}
+	if t.ResponseSchema != nil {
+		resolved, err := t.resolveResponseSchema()
+		if err != nil {
+			return err
+		}
+		t.responseValidator = resolved
+	}
+	return nil
+}
+
+func (t Tool) resolveResponseSchema() (*jsonschema.Resolved, error) {
+	data, err := json.Marshal(t.ResponseSchema)
+	if err != nil {
+		return nil, fmt.Errorf("tool %q: responseSchema must be a JSON Schema object", t.Name)
+	}
+	var wireSchema map[string]any
+	if err := json.Unmarshal(data, &wireSchema); err != nil {
+		return nil, fmt.Errorf("tool %q: responseSchema must be a JSON Schema object", t.Name)
+	}
+	if !validResponseSchemaTypes(wireSchema) {
+		return nil, fmt.Errorf("tool %q: responseSchema contains an invalid JSON type or schema dialect", t.Name)
+	}
+	var schema jsonschema.Schema
+	if err := json.Unmarshal(data, &schema); err != nil {
+		return nil, fmt.Errorf("tool %q: responseSchema must be a valid JSON Schema object", t.Name)
+	}
+	resolved, err := schema.Resolve(nil)
+	if err != nil {
+		// Schema diagnostics can contain literal values. Do not expose them
+		// in management errors or discovery logs.
+		return nil, fmt.Errorf("tool %q: invalid responseSchema or unresolved schema reference", t.Name)
+	}
+	return resolved, nil
+}
+
+// The pinned schema resolver does not reject unknown type names. Check only
+// schema positions, never literal data in defaults, enums, or examples.
+func validResponseSchemaTypes(value any) bool {
+	schema, ok := value.(map[string]any)
+	if !ok {
+		if schemas, ok := value.([]any); ok {
+			for _, child := range schemas {
+				if !validResponseSchemaTypes(child) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	validType := func(value any) bool {
+		switch value {
+		case "null", "boolean", "object", "array", "number", "integer", "string":
+			return true
+		}
+		return false
+	}
+	if value, present := schema["type"]; present {
+		if types, ok := value.([]any); ok {
+			if len(types) == 0 {
+				return false
+			}
+			seen := make(map[string]bool, len(types))
+			for _, value := range types {
+				name, ok := value.(string)
+				if !ok || !validType(name) || seen[name] {
+					return false
+				}
+				seen[name] = true
+			}
+		} else if name, ok := value.(string); !ok || !validType(name) {
+			return false
+		}
+	}
+	if dialect, present := schema["$schema"]; present && dialect != "https://json-schema.org/draft/2020-12/schema" && dialect != "http://json-schema.org/draft-07/schema#" {
+		return false
+	}
+	for _, keyword := range []string{"$defs", "definitions", "properties", "patternProperties", "dependentSchemas", "dependencies"} {
+		if children, ok := schema[keyword].(map[string]any); ok {
+			for _, child := range children {
+				if !validResponseSchemaTypes(child) {
+					return false
+				}
+			}
+		}
+	}
+	for _, keyword := range []string{"items", "additionalItems", "contains", "unevaluatedItems", "additionalProperties", "propertyNames", "unevaluatedProperties", "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "prefixItems", "contentSchema"} {
+		if !validResponseSchemaTypes(schema[keyword]) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateResponse checks an upstream JSON value without applying defaults or
+// exposing values in diagnostics. Validated manifests reuse a resolved schema.
+func (t Tool) ValidateResponse(body any) error {
+	if t.ResponseSchema == nil {
+		return nil
+	}
+	resolved := t.responseValidator
+	if resolved == nil {
+		var err error
+		resolved, err = t.resolveResponseSchema()
+		if err != nil {
+			return err
+		}
+	}
+	if err := resolved.Validate(body); err != nil {
+		return fmt.Errorf("upstream response does not match responseSchema")
 	}
 	return nil
 }
@@ -200,7 +322,8 @@ func (a App) Validate() error {
 		return fmt.Errorf("app %q: at least one tool is required", a.Name)
 	}
 	seen := make(map[string]struct{}, len(a.Tools))
-	for _, t := range a.Tools {
+	for i := range a.Tools {
+		t := &a.Tools[i]
 		if err := t.Validate(); err != nil {
 			return fmt.Errorf("app %q: %w", a.Name, err)
 		}

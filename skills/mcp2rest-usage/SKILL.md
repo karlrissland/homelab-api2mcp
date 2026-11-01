@@ -151,6 +151,14 @@ Response templates see only `request` and `response`, not the original
 when possible and otherwise a string; `response.rawBody` is always text.
 The rendered output is one MCP text-content item, not structured content.
 
+Rendered tools may opt into `responseSchema`, a JSON Schema for the upstream
+body before projection. Valid empty arrays remain successful; missing/null/
+wrong-type collections and malformed/empty JSON return safe text with
+`isError: true`, without executing the response template. Opted-in tools
+also return status-only errors on upstream HTTP 400+. Tools without
+`responseSchema` retain existing behavior. This is not MCP `outputSchema`;
+native forwarding and declared passthrough do not use it.
+
 For declared-tool calls, the optional top-level argument
 `__mcp2rest_caller_username` must be a nonblank string. The gateway strips
 it from `args` before template/relay execution and exposes it as
@@ -181,7 +189,8 @@ do not infer the cause solely from the stage label.
 | Schema or caller-argument validation | Arguments do not match the advertised contract | Correct the input; do not blindly retry |
 | Unknown tool/route (including HTTP 404) | Wrong endpoint, registration, or tool name | Check endpoint and refresh discovery |
 | Template/JSON-render failure | Manifest or template problem | Report; changing the key will not fix it |
-| Rendered upstream HTTP 400+ | Response template still renders; result has `isError: true` | Inspect content; distinguish upstream permission/input errors from transient faults |
+| Rendered upstream HTTP 400+ | Result has `isError: true`; opted-in response-schema tools return status-only text, otherwise the response template renders | Distinguish upstream permission/input errors from transient faults |
+| Upstream response validation | Valid HTTP response but invalid JSON or a `responseSchema` mismatch; result has `isError: true` | Report an upstream/manifest contract problem; do not treat empty output as valid diagnostics |
 | Native HTTP 503 for missing credential | Server-side credential not provisioned/loaded | Ask an operator to provision/reload; do not send your own upstream key |
 | Native upstream permission rejection | Server-owned credential or upstream policy rejected the action | Report the upstream error; changing gateway tier is not an upstream permission grant |
 | Network/upstream transport failure | Upstream may have executed before the failure | Retry only if safe/idempotent; avoid duplicate side effects |

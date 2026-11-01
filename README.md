@@ -13,7 +13,7 @@ not the upstream credentials.
 ## Status
 
 The implemented runtime supports management tools, durable gateway keys,
-Liquid REST mappings, per-tool MCP relay, native MCP endpoint passthrough,
+Liquid REST mappings with optional upstream response schemas, per-tool MCP relay, native MCP endpoint passthrough,
 Skill tools, and Prometheus metrics. It is not the whole original design.
 Code is the system of record; the plan records intent, not shipped guarantees.
 

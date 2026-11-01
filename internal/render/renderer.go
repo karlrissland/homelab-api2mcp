@@ -36,6 +36,7 @@ type Response struct {
 	Headers    map[string]string
 	Body       any
 	RawBody    string
+	jsonValid  bool
 }
 
 // Result is one rendered tool execution.
@@ -104,9 +105,22 @@ func (r *Renderer) Execute(ctx context.Context, app manifest.App, tool manifest.
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
+	if tool.ResponseSchema != nil && httpResp.StatusCode >= http.StatusBadRequest {
+		return responseErrorResult(req, httpResp.StatusCode, fmt.Sprintf("Upstream HTTP %d", httpResp.StatusCode)), nil
+	}
+
 	renderableResp, err := renderableResponse(httpResp)
 	if err != nil {
 		return Result{}, fmt.Errorf("read upstream response for tool %q: %w", tool.Name, err)
+	}
+
+	if tool.ResponseSchema != nil {
+		if !renderableResp.jsonValid {
+			return responseErrorResult(req, httpResp.StatusCode, "Upstream response is not valid JSON"), nil
+		}
+		if err := tool.ValidateResponse(renderableResp.Body); err != nil {
+			return responseErrorResult(req, httpResp.StatusCode, err.Error()), nil
+		}
 	}
 
 	content, err := r.renderResponse(tool, renderableResp, req)
@@ -120,6 +134,18 @@ func (r *Renderer) Execute(ctx context.Context, app manifest.App, tool manifest.
 		Content:  content,
 		IsError:  httpResp.StatusCode >= http.StatusBadRequest,
 	}, nil
+}
+
+func responseErrorResult(req Request, status int, content string) Result {
+	return Result{
+		Request: req,
+		Response: Response{
+			Status:     status,
+			StatusText: http.StatusText(status),
+		},
+		Content: content,
+		IsError: true,
+	}
 }
 
 func (r *Renderer) renderRequest(_ context.Context, app manifest.App, tool manifest.Tool, data Context) (Request, error) {
@@ -275,10 +301,12 @@ func renderableResponse(resp *http.Response) (Response, error) {
 
 	rawBody := string(bodyBytes)
 	body := any(rawBody)
+	jsonValid := false
 	if len(bodyBytes) > 0 {
 		var parsed any
 		if err := json.Unmarshal(bodyBytes, &parsed); err == nil {
 			body = parsed
+			jsonValid = true
 		}
 	}
 
@@ -288,6 +316,7 @@ func renderableResponse(resp *http.Response) (Response, error) {
 		Headers:    flattenHeaders(resp.Header),
 		Body:       body,
 		RawBody:    rawBody,
+		jsonValid:  jsonValid,
 	}, nil
 }
 

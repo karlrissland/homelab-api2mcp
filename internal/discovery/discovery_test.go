@@ -2,7 +2,9 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +13,74 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
+
+func TestResponseSchemaPersistenceAndIsolation(t *testing.T) {
+	for _, responseSchema := range []map[string]any{
+		{},
+		{"type": "object", "required": []any{"items"}, "properties": map[string]any{"items": map[string]any{"type": "array"}}},
+	} {
+		app := manifest.App{Name: "demo", Tools: []manifest.Tool{
+			{Name: "read", Tier: manifest.TierUser, Type: manifest.ToolTypeRendered, RequestTemplate: "{}", ResponseTemplate: "ok", ResponseSchema: responseSchema},
+			{Name: "legacy", Tier: manifest.TierUser, Type: manifest.ToolTypeRendered, RequestTemplate: "{}", ResponseTemplate: "ok"},
+		}}
+		cm, err := BuildConfigMap("apps", "demo-tools", app)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(cm.Data["manifest.yaml"], "responseSchema:") {
+			t.Fatal("persisted YAML lost the canonical responseSchema field")
+		}
+		encoded, err := json.Marshal(app)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, source := range []string{"manifest.yaml", "manifest.json"} {
+			input := cm.DeepCopy()
+			if source == "manifest.json" {
+				input.Data = map[string]string{source: string(encoded)}
+			}
+			parsed, err := ParseConfigMap(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Tools[0].ResponseSchema == nil || parsed.Tools[1].ResponseSchema != nil {
+				t.Fatalf("%s lost opt-in/opt-out distinction", source)
+			}
+			table := &Table{routes: map[string]*manifest.App{"demo": parsed}}
+			for _, copied := range []*manifest.App{table.List()[0], func() *manifest.App { app, _ := table.Get("demo"); return app }()} {
+				copied.Tools[0].ResponseSchema["type"] = "string"
+				if properties, ok := copied.Tools[0].ResponseSchema["properties"].(map[string]any); ok {
+					properties["items"].(map[string]any)["type"] = "string"
+					copied.Tools[0].ResponseSchema["required"].([]any)[0] = "other"
+				}
+			}
+			again, _ := table.Get("demo")
+			if again.Tools[0].ResponseSchema["type"] != responseSchema["type"] {
+				t.Fatal("routing table responseSchema was mutated through a copy")
+			}
+			if err := again.Tools[0].ValidateResponse(map[string]any{"items": []any{}}); err != nil {
+				t.Fatalf("resolved validation lost across discovery copies: %v", err)
+			}
+			if len(responseSchema) > 0 {
+				if err := again.Tools[0].ValidateResponse(map[string]any{}); err == nil {
+					t.Fatal("copied validator no longer required the collection")
+				}
+			}
+		}
+	}
+}
+
+func TestParseConfigMapRejectsInvalidResponseSchema(t *testing.T) {
+	cm := newValidConfigMap("apps", "demo-tools", "demo")
+	cm.Data = map[string]string{"manifest.json": `{
+		"name":"demo","tools":[{"name":"read","tier":"user","type":"rendered",
+		"requestTemplate":"{}","responseTemplate":"ok","responseSchema":{"type":"synthetic-sensitive-marker"}}]
+	}`}
+	_, err := ParseConfigMap(cm)
+	if err == nil || strings.Contains(err.Error(), "synthetic-sensitive-marker") {
+		t.Fatalf("invalid schema was accepted or exposed: %v", err)
+	}
+}
 
 func TestBuildConfigMapRoundTrip(t *testing.T) {
 	t.Parallel()

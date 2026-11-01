@@ -278,6 +278,7 @@ the ConfigMap's YAML.
 | `tier` | Required: `user` or `admin`; there is no implicit default for a tool |
 | `type` | Required: `rendered` or `passthrough` |
 | `inputSchema` | JSON Schema object; omitted/empty becomes `{"type":"object"}`, and a missing top-level `type` is filled with `object` |
+| `responseSchema` | Optional JSON Schema object for the upstream JSON body, only for `rendered`; validated before response-template execution |
 | `requestTemplate`, `responseTemplate` | Both nonempty for `rendered` |
 | `upstreamToolName` | Nonempty for `passthrough` |
 | `upstreamMCPURL` | Optional per-tool override of the app's MCP URL |
@@ -291,6 +292,8 @@ Validation checks required names, duplicate local tool names, recognized
 tiers/types, required templates/upstream tool names, and the presence of an
 effective URL for declared passthrough tools. Native URLs must be absolute
 HTTP(S), with a hostname and no userinfo or fragment.
+Configured response schemas are checked/resolved at registration and discovery;
+invalid schemas and unresolved references reject the manifest.
 
 Registration does **not** precompile Liquid or input schemas, probe upstream
 connectivity, or verify credentials. Declared per-tool URLs and rendered
@@ -408,6 +411,65 @@ response template's output, provided rendering succeeds. Other failures
 (template parsing, invalid rendered request JSON, HTTP request/read errors)
 become tool errors instead. The REST client uses Go's default redirect behavior;
 the native proxy's redirect handling is different.
+
+### Optional upstream response validation
+
+Rendered tools can declare `responseSchema` to distinguish a valid empty
+collection from a missing or malformed one. It validates the **upstream JSON
+body**, not the projected MCP text. For example, a collection reader can use:
+
+```yaml
+responseSchema:
+  type: object
+  required: [items]
+  properties:
+    items:
+      type: array
+requestTemplate: '{"method":"GET","path":"/synthetic/items"}'
+responseTemplate: |
+  {% for item in response.body.items %}{{ item.name }}
+  {% endfor %}
+```
+
+Use `results` instead of `items` for an upstream with that envelope. `[]`
+is valid; missing/null/object/string/number/boolean collections fail.
+Extra upstream fields remain allowed unless the schema forbids them.
+Array element schemas can additionally require the exact properties/types
+needed by the projection.
+
+The contract is opt-in:
+
+- Omitted or `null` `responseSchema` retains existing behavior, including
+  best-effort JSON decoding and template-owned HTTP error content.
+- An explicit `{}` still opts in and requires valid JSON, but imposes no
+  additional shape constraints. It is preserved through JSON/YAML persistence.
+- For HTTP status below 400, the complete response must be valid JSON and
+  satisfy the declared schema **before** the response template executes.
+  Empty bodies (including HTTP 204), invalid/trailing JSON, and schema
+  mismatches return a nonempty MCP text result with `isError: true`.
+- For HTTP 400+, opted-in tools skip response validation/rendering and return
+  only `Upstream HTTP <status>` with `isError: true`. Legacy tools still
+  render their response template on these statuses.
+- Validation errors use fixed text (`Upstream response is not valid JSON`
+  or `upstream response does not match responseSchema`). Neither decoder/
+  validator diagnostics nor rejected upstream bodies/headers are included
+  in the error content or pipeline logs.
+
+Schemas use the pinned `google/jsonschema-go` implementation, supporting
+draft 2020-12 (default) and draft-07. An explicit `$schema` must be
+`https://json-schema.org/draft/2020-12/schema` or
+`http://json-schema.org/draft-07/schema#`. Local references are supported;
+external references have no loader and are rejected, never fetched.
+Validation does not apply defaults, coerce values, or modify the body.
+The library ignores `format` and content-validation keywords; use explicit
+types, required fields, and `pattern` (Go regular-expression syntax) for
+assertions. Resolved schemas are reused across calls to discovered tools.
+
+No new Liquid filters/tags or MCP `outputSchema` are introduced. Successful
+output remains one projected text item; the gateway does not automatically
+redact successful template output. Author templates to expose only approved
+fields. Native forwarding and declared MCP passthrough are unchanged;
+`responseSchema` is rejected on a declared passthrough tool.
 
 ## Validation, errors, and transport
 

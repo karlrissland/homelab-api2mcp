@@ -222,7 +222,17 @@ func BuildConfigMap(namespace, name string, app manifest.App) (*corev1.ConfigMap
 	manifestApp := cloneApp(&app)
 	manifestApp.Namespace = ""
 
-	encoded, err := yaml.Marshal(manifestApp)
+	// Honor the JSON wire contract, including absent versus empty schemas,
+	// when persisting the manifest as YAML.
+	jsonBytes, err := json.Marshal(manifestApp)
+	if err != nil {
+		return nil, fmt.Errorf("build configmap %s/%s: encode manifest: %w", namespace, name, err)
+	}
+	var wireManifest map[string]any
+	if err := json.Unmarshal(jsonBytes, &wireManifest); err != nil {
+		return nil, fmt.Errorf("build configmap %s/%s: decode encoded manifest: %w", namespace, name, err)
+	}
+	encoded, err := yaml.Marshal(wireManifest)
 	if err != nil {
 		return nil, fmt.Errorf("build configmap %s/%s: marshal manifest: %w", namespace, name, err)
 	}
@@ -397,18 +407,11 @@ func cloneApp(app *manifest.App) *manifest.App {
 	}
 
 	for i, tool := range app.Tools {
-		cloned.Tools[i] = manifest.Tool{
-			Name:                  tool.Name,
-			Description:           tool.Description,
-			Tier:                  tool.Tier,
-			Type:                  tool.Type,
-			RequestTemplate:       tool.RequestTemplate,
-			ResponseTemplate:      tool.ResponseTemplate,
-			UpstreamToolName:      tool.UpstreamToolName,
-			InputSchema:           cloneStringAnyMap(tool.InputSchema),
-			UpstreamCredentialEnv: tool.UpstreamCredentialEnv,
-			UpstreamMCPURL:        tool.UpstreamMCPURL,
-		}
+		// Resolved validators are immutable and can be shared; schema maps
+		// returned to callers must remain isolated from the routing table.
+		cloned.Tools[i] = tool
+		cloned.Tools[i].InputSchema = cloneStringAnyMap(tool.InputSchema)
+		cloned.Tools[i].ResponseSchema = cloneStringAnyMap(tool.ResponseSchema)
 	}
 
 	return cloned

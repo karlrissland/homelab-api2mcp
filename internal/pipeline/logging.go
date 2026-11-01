@@ -31,7 +31,7 @@ func NewLoggingStage(logger *slog.Logger) Stage {
 			}
 			if call.RenderResult.IsError {
 				attrs = append(attrs, "upstream_status", call.RenderResult.Response.Status)
-				resolvedLogger.Warn("mcp2rest upstream rejected tool call", attrs...)
+				resolvedLogger.Warn("mcp2rest upstream response failed tool call", attrs...)
 				return
 			}
 			resolvedLogger.Info("mcp2rest tool call completed", attrs...)

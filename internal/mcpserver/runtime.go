@@ -223,7 +223,10 @@ with a user key is rejected before upstream execution. Gateway keys are
 agent-scoped, not app-scoped; the same admin tier also grants management
 access on /mcp. No management or Skill write tools are provided here.
 
-Rendered results are text; upstream HTTP 400+ sets isError. Declared MCP
+Rendered results are text; upstream HTTP 400+ sets isError. Rendered tools
+may declare responseSchema to validate the upstream JSON before projection;
+invalid JSON/schema mismatches and HTTP 400+ then return safe error text
+without rendering the response template. Declared MCP
 passthrough flattens upstream content to text and does not preserve its
 isError flag, so inspect content as well as errors before assuming success.
 The optional __mcp2rest_caller_username argument is caller-supplied, not
