@@ -274,7 +274,7 @@ the ConfigMap's YAML.
 | Tool field | Meaning |
 | --- | --- |
 | `name` | Required, unique within this app; exposed unchanged to clients |
-| `description` | Human-facing description |
+| `description` | Producer-owned final description, exposed unchanged in the declared tool's MCP `tools/list` entry |
 | `tier` | Required: `user` or `admin`; there is no implicit default for a tool |
 | `type` | Required: `rendered` or `passthrough` |
 | `inputSchema` | JSON Schema object; omitted/empty becomes `{"type":"object"}`, and a missing top-level `type` is filled with `object` |
@@ -301,6 +301,36 @@ request destinations do not receive the native endpoint's URL checks.
 `upstreamBaseURL` is a resolver base, not an outbound-host allowlist: a rendered
 absolute URL can select another destination. Treat manifests as trusted
 admin-controlled configuration.
+
+### Tool description contract
+
+For declared REST and individually declared MCP passthrough tools, producers
+own the final `description` string. Put the action, target system and resource
+scope upfront, followed by typical use cases, important limitations, and any
+genuine gateway-tier or caller-identity requirements. Deployment producers
+with authoritative environment information should include it in that string;
+the gateway has no cluster-name field and does not infer a cluster identity
+from URLs or namespaces.
+
+The gateway preserves this text through registration, persistence, discovery,
+`list_apps`/`get_manifest`, and the app endpoint's `tools/list`. It does not
+render Liquid in descriptions, prepend context, normalize or truncate prose,
+or fetch a declared passthrough tool's description from upstream. Existing
+empty descriptions remain accepted. Do not put credentials, Secret values,
+or other sensitive data in descriptions.
+
+Descriptions explain capabilities; they do not enforce permissions. A `user`
+tier does not imply read-only behavior, an `admin` gateway tier does not prove
+upstream admin access, and the optional caller username is unverified
+caller-supplied input. Gateway-owned management and Skill descriptions state
+their own action, scope, and key requirements independently of app prose.
+App Skill reads include that app's labeled Skills plus unlabeled global
+Skills across namespaces, not just documents owned by the app.
+
+Whole-native endpoint forwarding is unchanged: upstream owns its tool
+descriptions, instructions, schemas, and permissions. The gateway neither
+rewrites that surface nor adds environment context, so this contract does
+not solve native cross-cluster identity disambiguation.
 
 ### Discovery and readiness
 

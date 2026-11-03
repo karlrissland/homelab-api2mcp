@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,6 +19,7 @@ import (
 	"github.com/karlrissland/homelab-api2mcp/internal/adminapi"
 	"github.com/karlrissland/homelab-api2mcp/internal/discovery"
 	"github.com/karlrissland/homelab-api2mcp/internal/keys"
+	"github.com/karlrissland/homelab-api2mcp/internal/manifest"
 	"github.com/karlrissland/homelab-api2mcp/internal/passthrough"
 	"github.com/karlrissland/homelab-api2mcp/internal/pipeline"
 	"github.com/karlrissland/homelab-api2mcp/internal/render"
@@ -31,10 +31,14 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 
 	var publicCalls atomic.Int32
 	var adminCalls atomic.Int32
+	var upstreamRequests atomic.Int32
+	const localDescription = "  Local \"relay-demo\" text: na\u00efve.\n{{ args.name }}\t{% raw %}  "
+	const adminDescription = "Admin-only passthrough tool; gateway tier does not imply upstream role."
 
 	upstreamServer := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "0.0.1"}, nil)
 	mcp.AddTool(upstreamServer, &mcp.Tool{
-		Name: "echo_public",
+		Name:        "echo_public",
+		Description: "Distinct upstream description; must not replace the declared description.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -61,11 +65,15 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 		}, nil, nil
 	})
 
-	upstream := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+	upstreamHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return upstreamServer
 	}, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,
+	})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests.Add(1)
+		upstreamHandler.ServeHTTP(w, r)
 	}))
 	defer upstream.Close()
 
@@ -159,7 +167,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 				"tools": []any{
 					map[string]any{
 						"name":             "public_echo",
-						"description":      "Public passthrough tool",
+						"description":      localDescription,
 						"tier":             "user",
 						"type":             "passthrough",
 						"upstreamToolName": "echo_public",
@@ -172,7 +180,7 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 					},
 					map[string]any{
 						"name":             "admin_secret",
-						"description":      "Admin-only passthrough tool",
+						"description":      adminDescription,
 						"tier":             "admin",
 						"type":             "passthrough",
 						"upstreamToolName": "secret_admin",
@@ -197,22 +205,16 @@ func TestRuntimeHandlerPassthroughTierFilteringAndRelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetKey() error = %v", err)
 	}
+	assertDescriptionFlow(t, client, adminSession, server.URL, "relay-demo", agentKey.Key, adminKey, []manifest.Tool{
+		{Name: "public_echo", Description: localDescription, Tier: manifest.TierUser},
+		{Name: "admin_secret", Description: adminDescription, Tier: manifest.TierAdmin},
+	})
+	if got := upstreamRequests.Load(); got != 0 {
+		t.Fatalf("registration and tools/list made %d upstream requests, want none", got)
+	}
 
 	appSession := connectHTTPClient(t, server.URL+"/relay-demo/mcp", agentKey.Key)
 	defer func() { _ = appSession.Close() }()
-
-	tools, err := appSession.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("ListTools() error = %v", err)
-	}
-	names := make([]string, 0, len(tools.Tools))
-	for _, tool := range tools.Tools {
-		names = append(names, tool.Name)
-	}
-	slices.Sort(names)
-	if got, want := strings.Join(names, ","), "get_relay_demo_skill,list_relay_demo_skills,public_echo"; got != want {
-		t.Fatalf("ListTools() names = %q, want %q", got, want)
-	}
 
 	callResult, err := appSession.CallTool(context.Background(), &mcp.CallToolParams{
 		Name:      "public_echo",

@@ -213,7 +213,7 @@ func (a *API) SetInternalBaseURL(baseURL string) {
 func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "register_app",
-		Description: "Validate a manifest, upsert its discovery ConfigMap, and ensure a key exists for each namespace-qualified authorized agent at its declared tier (default user). Admin tier required. authorizedAgents ensures keys; it is not an app access allowlist.",
+		Description: "Register or update an app in this mcp2rest gateway by validating its manifest and upserting its discovery ConfigMap. Requires an admin-tier gateway key. Use to publish the app's separate MCP endpoint, not to call its API or connect a harness. Ensures a key for each namespace-qualified authorized agent at that agent's declared tier (default user); authorizedAgents is not an app access allowlist.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -244,7 +244,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "deregister_app",
-		Description: "Delete one app registration ConfigMap. Existing keys remain valid until manually revoked.",
+		Description: "Remove one app registration from this mcp2rest gateway by deleting its discovery ConfigMap. Requires an admin-tier gateway key. Use to stop advertising the app's gateway endpoint; this does not uninstall the app or revoke existing gateway keys.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params DeregisterAppParams) (*mcp.CallToolResult, DeregisterAppResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, DeregisterAppResult{}, err
@@ -255,20 +255,10 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_apps",
-		Description: "List every app registered with mcp2rest, from the live discovery table. Admin tier " +
-			"required. Returns app registrations, declared tools/schemas, and derived gateway connection " +
-			"fields, but no API key. Calling a listed tool name directly on THIS session will " +
-			"fail (these tools do not exist here). Each returned app includes mcpInternalUrl -- a " +
-			"ready-to-use, in-cluster URL (e.g. \"http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp\") " +
-			"-- PREFER this for any agent harness, since every harness mcp2rest serves runs inside the " +
-			"same cluster; it avoids an unnecessary ingress hop and the external hostname's TLS " +
-			"certificate, which an in-cluster client's trust store typically does not recognize (this " +
-			"exact failure mode -- UNABLE_TO_VERIFY_LEAF_SIGNATURE -- is why this field exists). Also " +
-			"includes mcpEndpointPath (e.g. \"/metube/mcp\"); the full external URL is " +
-			"https://mcp2rest.<dns-zone>{mcpEndpointPath}, reserved for callers genuinely outside the " +
-			"cluster. A human operator must add the chosen URL as a NEW, separate MCP server entry in " +
-			"your client/harness, authenticated with that agent instance's own key -- there is no tool " +
-			"call, here or anywhere, that adds it for you.",
+		Description: "Read app registrations from this mcp2rest gateway's live discovery table. Requires an admin-tier gateway key. " +
+			"Use to find declared tools, schemas, and each app's separate MCP endpoint; this does not call app APIs, connect a harness, or return an API key. " +
+			"Configure a separate MCP client connection with an agent gateway key: prefer mcpInternalUrl for in-cluster access when returned; otherwise combine mcpEndpointPath with the operator-supplied gateway base URL. " +
+			"Returned app tool names cannot be called on this management session. Native registrations have no local tools; discover them on their app endpoint.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListAppsResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ListAppsResult{}, err
@@ -288,22 +278,10 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_manifest",
-		Description: "Fetch one app's full internal manifest (tool names, descriptions, input schemas, " +
-			"tiers) by app name. Admin tier required. This is read-only documentation of what that app's " +
-			"own MCP endpoint will expose -- it does NOT register, connect, or add the tool to any agent " +
-			"or harness, and does NOT return an API key. Calling one of the returned tool names (e.g. " +
-			"queue_download) directly on THIS session will fail -- those tools do not exist here. The " +
-			"result includes mcpInternalUrl -- a ready-to-use, in-cluster URL (e.g. " +
-			"\"http://mcp2rest.mcp2rest.svc.cluster.local:8080/metube/mcp\") -- PREFER this for any agent " +
-			"harness, since every harness mcp2rest serves runs inside the same cluster; it avoids an " +
-			"unnecessary ingress hop and the external hostname's TLS certificate, which an in-cluster " +
-			"client's trust store typically does not recognize (this exact failure mode -- " +
-			"UNABLE_TO_VERIFY_LEAF_SIGNATURE -- is why this field exists). Also includes mcpEndpointPath " +
-			"(e.g. \"/metube/mcp\"); the full external URL is https://mcp2rest.<dns-zone>{mcpEndpointPath}, " +
-			"reserved for callers genuinely outside the cluster. A human operator must add the chosen URL " +
-			"as a NEW, separate MCP client/server entry, authenticated with that agent instance's own key " +
-			"from hlctl's agent-specific key handoff -- there is no tool call, here or anywhere, " +
-			"that adds or connects it for you.",
+		Description: "Read one app's registered manifest from this mcp2rest gateway by app name, including declared tool descriptions, schemas, and tiers. Requires an admin-tier gateway key. " +
+			"Use to inspect registration and connection details; this does not change registration, connect a harness, call app APIs, or return an API key. " +
+			"Configure a separate MCP client connection with an agent gateway key: prefer mcpInternalUrl for in-cluster access when returned; otherwise combine mcpEndpointPath with the operator-supplied gateway base URL. " +
+			"Returned app tool names cannot be called on this management session. Native registrations have no local tools; discover them on their app endpoint.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetManifestParams) (*mcp.CallToolResult, manifest.App, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, manifest.App{}, err
@@ -314,7 +292,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "create_key",
-		Description: "Mint and return a user/admin key for one namespace-qualified agent. Persist it in the gateway namespace; the caller delivers it to the agent.",
+		Description: "Create and return a raw user- or admin-tier key for one namespace-qualified agent in this mcp2rest gateway. Requires an admin-tier gateway key. Use to provision gateway access; the new key is persisted in the gateway namespace, and the caller must protect and deliver it to the agent. Gateway keys are not app-scoped or upstream API credentials.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params CreateKeyParams) (*mcp.CallToolResult, CreateKeyResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, CreateKeyResult{}, err
@@ -325,7 +303,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "list_keys",
-		Description: "List known key identities, namespaces, tiers, and creation times without raw key material.",
+		Description: "Read agent-key metadata known to this mcp2rest gateway: agent identities, namespaces, tiers, and creation times. Requires an admin-tier gateway key. Use to audit issued gateway keys; does not return raw keys or create, rotate, or revoke them.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListKeysResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ListKeysResult{}, err
@@ -335,9 +313,8 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_key",
-		Description: "Fetch a persisted raw key for one agent namespace+instance+tier, including after gateway restart. Admin tier required. " +
-			"Narrow exception to mcp2rest's normal key-delivery model, for callers (e.g. hlctl) that must " +
-			"bake a literal credential value into another system's own static config at deploy time.",
+		Description: "Retrieve a persisted raw key from this mcp2rest gateway for one agent namespace, instance, and tier, including after restart. Requires an admin-tier gateway key. " +
+			"Use to configure a harness that needs an existing literal gateway credential; protect the returned secret. This does not create or rotate a key, and the key is not an upstream API credential.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params GetKeyParams) (*mcp.CallToolResult, GetKeyResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, GetKeyResult{}, err
@@ -348,7 +325,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "revoke_key",
-		Description: "Revoke either one raw key or every key matching an agent instance and tier.",
+		Description: "Revoke gateway access in this mcp2rest gateway for one raw key or the keys matching an agent instance and tier in the supplied agent namespace. Requires an admin-tier gateway key. Use to withdraw compromised or obsolete gateway credentials; this does not revoke server-owned upstream API credentials.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params RevokeKeyParams) (*mcp.CallToolResult, RevokeKeyResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, RevokeKeyResult{}, err
@@ -359,7 +336,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "rotate_key",
-		Description: "Mint a replacement key for one agent instance+tier, update its Secret, and revoke the prior key(s).",
+		Description: "Replace gateway credentials in this mcp2rest gateway for one agent namespace, instance, and tier, revoking the prior keys. Requires an admin-tier gateway key. Use for manual rotation; protect and deliver the returned raw key to the agent. This does not rotate server-owned upstream API credentials.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params RotateKeyParams) (*mcp.CallToolResult, RotateKeyResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, RotateKeyResult{}, err
@@ -370,7 +347,7 @@ func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "reload_cache",
-		Description: "Reload upstream credentials for persisted app registrations. Call after provisioning or rotating an app's api-keys/mcp-keys Secret; it does not depend on informer delivery.",
+		Description: "Reload this mcp2rest gateway's server-owned upstream credential cache from Secrets for persisted app registrations. Requires an admin-tier gateway key. Use after provisioning or rotating an app's api-keys/mcp-keys Secret; this does not rotate credentials or return their values, and does not depend on informer delivery.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ReloadCacheResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
 			return nil, ReloadCacheResult{}, err

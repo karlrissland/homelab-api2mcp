@@ -172,14 +172,14 @@ func ToolNameSlug(s string) string {
 func (a *API) RegisterReadTools(server *mcp.Server, apiKey string, appScope string) {
 	listName := "list_skills"
 	getName := "get_skill"
-	listDescription := "List every Skill custom resource cluster-wide as compact summaries (name, namespace, skillName, domain, description)."
-	getDescription := "Fetch one Skill custom resource by metadata.name, returning the full Skill content."
+	listDescription := "Read Skill documentation across all namespaces in this gateway's connected Kubernetes cluster. Requires a valid user- or admin-tier gateway key. Use to find usage guidance, not perform app actions. Returns compact summaries (name, namespace, skillName, domain, description); use get_skill with the listed resource name and namespace for full content. Includes every app's Skills and global Skills."
+	getDescription := "Read one Skill document from any namespace in this gateway's connected Kubernetes cluster. Requires a valid user- or admin-tier gateway key. Use to retrieve full usage guidance, not perform app actions. Pass the resource's metadata.name, not skillName, and its namespace from list_skills to disambiguate duplicate names. Includes every app's Skills and global Skills."
 	if appScope != "" {
 		slug := ToolNameSlug(appScope)
 		listName = fmt.Sprintf("list_%s_skills", slug)
 		getName = fmt.Sprintf("get_%s_skill", slug)
-		listDescription = fmt.Sprintf("List this app's (%q) own Skill custom resources as compact summaries (name, namespace, skillName, domain, description). Skills belonging to other apps are not visible here.", appScope)
-		getDescription = fmt.Sprintf("Fetch one of this app's (%q) own Skill custom resources by metadata.name, returning the full Skill content. Skills belonging to other apps are not visible here.", appScope)
+		listDescription = fmt.Sprintf("Read Skill documentation for app %q plus global Skills without an app label, across namespaces in this gateway's connected Kubernetes cluster. Requires a valid user- or admin-tier gateway key. Use to find usage guidance, not perform app actions. Returns compact summaries (name, namespace, skillName, domain, description); use %s with the listed resource name and namespace for full content. Other apps' labeled Skills are excluded.", appScope, getName)
+		getDescription = fmt.Sprintf("Read a full Skill document for app %q or a global Skill without an app label, across namespaces in this gateway's connected Kubernetes cluster. Requires a valid user- or admin-tier gateway key. Use to retrieve usage guidance, not perform app actions. Pass the resource's metadata.name, not skillName, and its namespace from %s to disambiguate duplicate names. Other apps' labeled Skills are excluded.", appScope, listName)
 	}
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -232,7 +232,7 @@ func (a *API) RegisterWriteTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "create_skill",
-		Description: "Create one Skill custom resource. Admin tier required.",
+		Description: "Create one Skill documentation resource in the supplied namespace of this gateway's connected Kubernetes cluster. Requires an admin-tier gateway key. Use to publish guidance and its labels; this does not register an app or execute app actions.",
 		InputSchema: skillInputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params CreateSkillParams) (*mcp.CallToolResult, CreateSkillResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
@@ -244,7 +244,7 @@ func (a *API) RegisterWriteTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "update_skill",
-		Description: "Replace one existing Skill custom resource's labels and spec. Admin tier required.",
+		Description: "Replace one existing Skill document's labels and entire spec by resource name and namespace in this gateway's connected Kubernetes cluster. Requires an admin-tier gateway key. Use to revise guidance; this is a full replacement, not a patch, and does not modify app configuration.",
 		InputSchema: skillInputSchema,
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, params UpdateSkillParams) (*mcp.CallToolResult, UpdateSkillResult, error) {
 		if err := a.requireAdmin(apiKey); err != nil {
@@ -256,7 +256,7 @@ func (a *API) RegisterWriteTools(server *mcp.Server, apiKey string) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "delete_skill",
-		Description: "Delete one Skill custom resource by name and namespace. Admin tier required.",
+		Description: "Delete one Skill documentation resource by resource name and namespace in this gateway's connected Kubernetes cluster. Requires an admin-tier gateway key. Use to remove obsolete guidance; this does not uninstall an app or remove its MCP registration.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
