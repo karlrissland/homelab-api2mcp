@@ -78,7 +78,7 @@ func main() {
 
 	store := keys.NewStore()
 	if os.Getenv("MCP2REST_DISABLE_AUTH") == "true" {
-		logger.Warn("MCP2REST_DISABLE_AUTH=true: authentication and authorization are DISABLED cluster-wide; every request (per-app, management, and skills tools) is treated as an authenticated admin-tier caller regardless of any key presented. Temporary debugging escape hatch only -- do not run in production.")
+		logger.Warn("MCP2REST_DISABLE_AUTH=true: authentication and authorization are DISABLED for app, legacy management, and skills tools; callers are treated as admin regardless of any key presented. Human credential management still requires a real stored admin key. Temporary debugging escape hatch only -- do not run in production.")
 		store.DisableAuth()
 	}
 	writer, err := keys.NewSecretWriter(client)
@@ -97,6 +97,13 @@ func main() {
 	if err := agents.Restore(ctx); err != nil {
 		fatal("restore persisted agent keys", err)
 	}
+	humans, err := keys.NewHumanKeys(writer, namespace, store)
+	if err != nil {
+		fatal("create human key repository", err)
+	}
+	if err := humans.Restore(ctx); err != nil {
+		fatal("restore persisted human keys", err)
+	}
 	creds, err := upstreamcreds.New(client, namespace)
 	if err != nil {
 		fatal("create upstream credential cache", err)
@@ -107,6 +114,9 @@ func main() {
 	admin, err := adminapi.New(client, table, store, agents, creds)
 	if err != nil {
 		fatal("create admin api", err)
+	}
+	if err := admin.SetHumanKeys(humans); err != nil {
+		fatal("configure human key management", err)
 	}
 	admin.SetInternalBaseURL(internalBaseURL(serviceName, namespace, addr))
 	registry := prometheus.NewRegistry()

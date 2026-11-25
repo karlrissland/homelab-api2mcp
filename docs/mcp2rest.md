@@ -54,8 +54,8 @@ flowchart TD
 ### Connect a client
 
 Use an MCP **Streamable HTTP** client with
-`Authorization: Bearer <gateway-agent-key>` on requests. The gateway key
-identifies an agent instance and its `user` or `admin` tier; it is not the app's
+`Authorization: Bearer <gateway-key>` on requests. The gateway key
+identifies an agent instance or canonical human and its `user` or `admin` tier; it is not the app's
 upstream credential.
 
 An admin can call `list_apps` or `get_manifest` on `/mcp` to discover registered
@@ -92,6 +92,8 @@ Configure a separate client server entry for each required app endpoint.
   including callers with no key. This affects management, Skills, mapped tools,
   and the native gateway check; it does not disable upstream authentication.
   It is a debugging escape hatch, not a production configuration.
+  Canonical-human management requires a real stored admin key even with
+  this bypass; see the [human credential contract](human-credentials.md).
 
 The [key operations in the README](../README.md) describe how keys are
 provisioned and persisted. Do not put raw keys or upstream secrets in manifests,
@@ -587,6 +589,12 @@ Go wire types.
 | `revoke_key` | `{namespace, rawKey?, agentInstance?, tier?}`; supply a raw key or an agent+tier; returns revoked count |
 | `rotate_key` | `{agentInstance, namespace, tier}`; replaces agent+tier keys and returns new raw key plus revoked count |
 | `reload_cache` | `{}`; rebuilds upstream credential cache and returns `{apps: <count>}` |
+
+The distinct canonical-human tools `human_key_capabilities`, `put_human`,
+`get_human`, `create_human_key`, and `get_human_key` use the
+[versioned human credential contract](human-credentials.md). They never alias
+humans as agents; lookup is read-only and issuance is explicit. Their real
+stored-admin boundary does not accept the debugging auth bypass.
 
 Raw-key retrieval is an intentional admin capability, not a claim that keys
 are disclosed only at mint time. See [README key operations](../README.md)

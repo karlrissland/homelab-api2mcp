@@ -160,7 +160,8 @@ const managementInstructions = `You are connected to mcp2rest's MANAGEMENT endpo
 mcp2rest is a shared REST/MCP gateway for homelab apps. This endpoint only
 exposes mcp2rest's own control-plane tools (register_app, deregister_app,
 list_apps, get_manifest, create_key, list_keys, get_key, revoke_key,
-rotate_key, reload_cache) plus the built-in Skill documentation tools
+rotate_key, reload_cache, human_key_capabilities, put_human, get_human,
+create_human_key, get_human_key) plus the built-in Skill documentation tools
 (list_skills, get_skill, create_skill, update_skill, delete_skill).
 These tools do NOT call a registered app's actual API.
 
@@ -169,6 +170,9 @@ list_apps and get_manifest. Skill reads accept any valid user/admin key;
 Skill writes require admin. These tools are listed even when a caller
 cannot use them: discovery is not authorization. There is no separate
 proxy-admin scope, and gateway keys are not restricted to individual apps.
+Human management requires a real stored admin key, not the debugging auth
+bypass. Human identity/eligibility is explicitly attested by hlctl; lookup
+never issues credentials. Detect the version with human_key_capabilities.
 
 Generic list_skills/get_skill read Skills cluster-wide. Use a returned
 resource's name and namespace with get_skill; skillName is not its identity.
@@ -220,7 +224,7 @@ even though their names remain visible without one.
 For %q's actual app actions, only declared tools allowed by your gateway
 key's user/admin tier appear in tools/list. Calling a declared admin tool
 with a user key is rejected before upstream execution. Gateway keys are
-agent-scoped, not app-scoped; the same admin tier also grants management
+bound to an agent or canonical human, not app-scoped; the same admin tier also grants management
 access on /mcp. No management or Skill write tools are provided here.
 
 Rendered results are text; upstream HTTP 400+ sets isError. Rendered tools
@@ -345,6 +349,7 @@ func (h *runtimeHandler) lookupKey(rawKey string) (pipeline.KeyRecord, bool) {
 	}
 	return pipeline.KeyRecord{
 		AgentInstance: record.AgentInstance,
+		HomelabUserID: record.HomelabUserID,
 		Tier:          record.Tier,
 	}, true
 }

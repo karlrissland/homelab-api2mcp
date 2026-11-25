@@ -46,7 +46,7 @@ upstream tools: discover them on its app endpoint.
 
 ### Keys, tiers, and visibility
 
-Gateway keys identify a **namespace-qualified agent instance and tier**,
+Gateway keys identify a **namespace-qualified agent instance or canonical human, and tier**,
 not an app. There is currently no per-key app allowlist. Registering an app
 with `authorizedAgents` ensures agent keys exist; it does not restrict those
 keys to that app.
@@ -70,12 +70,14 @@ These are gateway guarantees, not proof that an upstream action is permitted
 for an end user. Do not use missing per-app restrictions to exceed your task.
 The debugging-only `MCP2REST_DISABLE_AUTH=true` switch treats even keyless
 requests as admin; it must not be used as a permission workaround.
+Canonical-human management tools still require a real stored admin key.
 
 ### Management and durable credential ownership
 
 The management names on `/mcp` are `register_app`, `deregister_app`,
 `list_apps`, `get_manifest`, `create_key`, `list_keys`, `get_key`,
-`revoke_key`, `rotate_key`, and `reload_cache`. Discover their schemas before
+`revoke_key`, `rotate_key`, `reload_cache`, `human_key_capabilities`,
+`put_human`, `get_human`, `create_human_key`, and `get_human_key`. Discover their schemas before
 use; none are injected into app sessions.
 
 `register_app` accepts an authorized agent's `tier` (default `user`), but
@@ -92,6 +94,15 @@ and admin-only `get_key` can retrieve a persisted key after restart.
 `list_keys` never returns raw keys. The provisioner/caller delivers a key to
 the harness or an agent-namespace Secret; that copy is not authoritative.
 Never put raw keys in logs, examples, or documentation.
+
+Human identity is canonical `homelab_user_id`, never synthetic agent
+coordinates or mutable username/email. hlctl explicitly attests current
+identity/eligibility via `put_human`; `create_human_key` is deliberate initial
+issuance and `get_human_key` only reads an existing eligible key at the
+attested revision. Missing/denied/parse/transient lookup failures never mint.
+Detect source API v1 with `human_key_capabilities`; compatible releases/live
+projection are separate acceptance. See `docs/human-credentials.md` for the
+full provider contract and lifecycle.
 
 Bootstrap uses the persistent gateway Secret `mcp2rest-bootstrap-admin`,
 data key `key`; normal startup reuses it, not rotates it or prints its value.

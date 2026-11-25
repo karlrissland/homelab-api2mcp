@@ -13,7 +13,7 @@ import (
 
 const secretDataKey = "keys.json"
 
-// SecretWriter supplies Kubernetes access for bootstrap and agent credentials.
+// SecretWriter supplies Kubernetes access for bootstrap, agent, and human credentials.
 // Its raw-key helpers retain the legacy delivery format; AgentKeys owns the
 // authoritative records and their authorization metadata.
 type SecretWriter struct {
@@ -26,6 +26,22 @@ func NewSecretWriter(client kubernetes.Interface) (*SecretWriter, error) {
 		return nil, fmt.Errorf("new secret writer: kubernetes client is required")
 	}
 	return &SecretWriter{client: client}, nil
+}
+
+func (w *SecretWriter) listHumanSecrets(ctx context.Context, namespace string) ([]corev1.Secret, error) {
+	secrets, err := w.client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{LabelSelector: HumanSecretLabel + "=true"})
+	if err != nil {
+		return nil, err
+	}
+	return secrets.Items, nil
+}
+
+func (w *SecretWriter) saveHumanSecret(ctx context.Context, secret *corev1.Secret, create bool) (*corev1.Secret, error) {
+	secrets := w.client.CoreV1().Secrets(secret.Namespace)
+	if create {
+		return secrets.Create(ctx, secret, metav1.CreateOptions{})
+	}
+	return secrets.Update(ctx, secret, metav1.UpdateOptions{})
 }
 
 // SecretName returns the legacy per-instance delivery Secret name.

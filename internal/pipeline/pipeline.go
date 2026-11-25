@@ -75,12 +75,14 @@ type CallContext struct {
 // Caller is the authenticated identity for the current request.
 type Caller struct {
 	AgentInstance string
+	HomelabUserID string
 	Tier          manifest.Tier
 }
 
 // KeyRecord describes the caller identity bound to one API key.
 type KeyRecord struct {
 	AgentInstance string
+	HomelabUserID string
 	Tier          manifest.Tier
 }
 

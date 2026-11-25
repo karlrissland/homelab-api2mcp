@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
@@ -26,10 +27,12 @@ type CredentialReloader interface {
 
 // API serves the reserved management tool set.
 type API struct {
+	humanMu         sync.Mutex
 	client          kubernetes.Interface
 	table           *discovery.Table
 	store           *keys.Store
 	agents          *keys.AgentKeys
+	humans          *keys.HumanKeys
 	creds           CredentialReloader
 	internalBaseURL string
 }
@@ -211,6 +214,9 @@ func (a *API) SetInternalBaseURL(baseURL string) {
 // RegisterTools adds the reserved management tools to server, authorizing
 // every call with the provided raw API key.
 func (a *API) RegisterTools(server *mcp.Server, apiKey string) {
+	if a.humans != nil {
+		a.registerHumanTools(server, apiKey)
+	}
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "register_app",
 		Description: "Register or update an app in this mcp2rest gateway by validating its manifest and upserting its discovery ConfigMap. Requires an admin-tier gateway key. Use to publish the app's separate MCP endpoint, not to call its API or connect a harness. Ensures a key for each namespace-qualified authorized agent at that agent's declared tier (default user); authorizedAgents is not an app access allowlist.",
@@ -513,6 +519,9 @@ func (a *API) ListKeys(context.Context) []KeyRecord {
 	records := a.store.List()
 	out := make([]KeyRecord, 0, len(records))
 	for _, record := range records {
+		if record.HomelabUserID != "" {
+			continue
+		}
 		out = append(out, formatKeyRecord(record))
 	}
 	return out

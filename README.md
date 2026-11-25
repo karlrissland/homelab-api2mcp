@@ -22,6 +22,10 @@ Code is the system of record; the plan records intent, not shipped guarantees.
 - [Configuration and Kubernetes setup](#configuration-and-kubernetes-setup)
 - [Bootstrap handoff](#bootstrap-provisioning-credentials) and
   [persistent agent keys](#persistent-agent-keys-and-provisioner-handoff)
+- [Canonical-human credentials](docs/human-credentials.md): source API v1,
+  explicit provisioning, eligibility lifecycle, and protected read-only lookup.
+- [Human-v1 checkpoint](docs/human-v1-checkpoint.md): unfinished integration
+  state, companion expectations, checks, and published test-image provenance.
 - [Management API quick reference](#management-api-quick-reference)
 - [Native MCP passthrough](#native-mcp-endpoint-passthrough) and
   [Liquid REST mappings](#liquid-rest-mappings-and-home-assistant-scope)
@@ -90,7 +94,7 @@ credentials and does not configure harnesses or mint upstream tokens.
 | Environment variable | Default | Meaning |
 |---|---|---|
 | `MCP2REST_ADDR` | `:8080` | HTTP listen address; no built-in TLS listener. |
-| `MCP2REST_NAMESPACE` | `mcp2rest` | Storage namespace for bootstrap, agent keys, and upstream credentials; not inferred from the pod namespace. |
+| `MCP2REST_NAMESPACE` | `mcp2rest` | Storage namespace for bootstrap, agent/human keys, and upstream credentials; not inferred from the pod namespace. |
 | `MCP2REST_SERVICE_NAME` | `mcp2rest` | Service name used to derive `mcpInternalUrl`; does not create a Service. |
 | `MCP2REST_DISABLE_AUTH` | unset | Only literal `true` enables the insecure admin-tier bypass. |
 
@@ -117,7 +121,7 @@ separate from MCP caller tiers:
 |---|---|---|
 | Discovery and persisted registration snapshots | ConfigMaps across all namespaces: `list/watch`; registration adds `get/create/update/delete` in each managed app namespace. | [Discovery ClusterRole](manifests/rbac/discovery-clusterrole.yaml) supplies `get/list/watch`, **not** registration writes or a binding. |
 | Bootstrap initialization | Named bootstrap Secret: `get`; Secrets in gateway namespace: `create`. | [Bootstrap Role + RoleBinding](manifests/rbac/bootstrap-role.yaml) |
-| Durable agent keys | Secrets in gateway namespace: `get/list/create/update`. | [Agent-key Role + RoleBinding](manifests/rbac/agent-keys-role.yaml) |
+| Durable agent and human keys | Secrets in gateway namespace: `get/list/create/update`. | [Agent-key Role + RoleBinding](manifests/rbac/agent-keys-role.yaml) |
 | Upstream credential preload/reload | Known Secrets in gateway namespace: `get`. | [Upstream Role](manifests/rbac/upstream-creds-role.yaml); add its binding if using it separately. |
 | Skill tools | `skills.skills.homelab.dev`: cluster-wide `get/list` for reads; `create/update/delete` in managed namespaces for writes. | [Skills ClusterRole](manifests/rbac/skills-clusterrole.yaml) also grants `watch` (unused by the current Skill API); add bindings. |
 
@@ -130,7 +134,7 @@ Secret access can expose credentials, and registration ConfigMap write
 access can change executable mappings and upstream destinations.
 
 Startup waits for initial ConfigMap discovery, ensures the bootstrap
-Secret, restores all durable agent keys, preloads upstream credentials,
+Secret, restores all durable agent and human keys, preloads upstream credentials,
 then builds the handlers and starts listening. Discovery can wait
 indefinitely if its initial list/watch cannot synchronize. Invalid
 registration events are logged/skipped; discovery sync does not prove
@@ -272,6 +276,15 @@ See the [runtime contract](docs/mcp2rest.md) for the full author/API reference.
 | `rotate_key` | Required `agentInstance`, `namespace`, `tier`. | `agentInstance`, `namespace`, `tier`, raw `key`, `revoked` count. |
 | `revoke_key` | Required `namespace`, plus either `rawKey` or both `agentInstance` and `tier`. | `agentInstance`, `namespace`, `revoked` count; no raw key. |
 | `reload_cache` | None. | `{apps: N}` for the persisted registration snapshot used to reload upstream credentials; not an agent/bootstrap reload. |
+
+Canonical-human tools are separate: `human_key_capabilities`, `put_human`,
+`get_human`, `create_human_key`, and `get_human_key`. They require a real stored
+admin key even with the auth bypass enabled. Their [versioned contract](docs/human-credentials.md)
+defines explicit hlctl identity/eligibility attestation, deliberate initial
+issuance, revision-pinned read-only lookup, and fail-closed lifecycle behavior.
+`list_keys` remains agent/bootstrap metadata, not a human inventory.
+No compatible released provider/client pair or live widget acceptance is
+claimed by this source addition.
 
 Explicit key tools require `tier` to be `user` or `admin`; there is no
 default. Agent names must be Kubernetes DNS subdomain names, and agent
@@ -548,6 +561,7 @@ Set `MCP2REST_DISABLE_AUTH=true` to run with authentication/authorization
 disabled cluster-wide: every request (per-app, management, and skills
 tools) is treated as an authenticated admin-tier caller, regardless of any
 key presented. This is a temporary debugging escape hatch only — never
-run with this set in production. It does **not** disable Kubernetes
+run with this set in production. Canonical-human management still requires
+a real stored admin key. The switch does **not** disable Kubernetes
 initialization, Secret restoration, upstream credential loading, or the
 upstream's own authentication requirements.

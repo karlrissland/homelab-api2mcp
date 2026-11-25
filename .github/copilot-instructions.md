@@ -41,7 +41,7 @@ homelab-api2mcp/
 │   ├── pipeline/            # ordered, named middleware stages (authn→authz→...→respond)
 │   ├── render/              # Liquid render context + execution (request/response templates)
 │   ├── discovery/           # ConfigMap informer, routing table
-│   ├── keys/                # durable namespace-qualified agent keys + bootstrap
+│   ├── keys/                # durable agent/canonical-human keys + bootstrap
 │   ├── manifest/            # shared app/tool models and validation
 │   ├── adminapi/            # register_app/list_apps/create_key/... management tools
 │   ├── skillstools/         # generic management + app-scoped Skill CRD tools
@@ -93,7 +93,10 @@ conflicts; keep boundary refactors separate from documentation fixes.
   tier. Declared app tools live on `/{app}/mcp`, with tier-filtered discovery
   and call-time enforcement, plus app/global Skill reads under app-specific
   names.
-- Gateway keys identify agent namespace+instance+tier, not app scope.
+- Gateway keys identify agent namespace+instance+tier or canonical human
+  homelab_user_id+tier, not app scope. Human management uses explicit hlctl
+  administrative identity/eligibility assertions, real stored-admin auth,
+  and versioned read-only lookup; see `docs/human-credentials.md`.
   `authorizedAgents` ensures keys; it is not an app allowlist. There is no
   distinct proxy-admin scope. Do not document planned isolation as enforced.
 - Native endpoints (no declared tools, `upstreamMCPURL` set) authenticate a

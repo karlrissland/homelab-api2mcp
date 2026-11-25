@@ -22,6 +22,7 @@ var ErrKeyNotFound = errors.New("key not found")
 type Record struct {
 	AgentInstance string
 	Namespace     string
+	HomelabUserID string
 	Tier          manifest.Tier
 	CreatedAt     time.Time
 }
@@ -89,7 +90,7 @@ func (s *Store) Import(key string, record Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.records[digest]; ok {
-		if existing.AgentInstance != record.AgentInstance || existing.Namespace != record.Namespace || existing.Tier != record.Tier {
+		if !sameOwner(existing, record) {
 			return fmt.Errorf("import key: key is already registered for a different identity or tier")
 		}
 		return nil
@@ -99,8 +100,9 @@ func (s *Store) Import(key string, record Record) error {
 }
 
 func (s *Store) validate(key string, record Record) error {
-	if record.AgentInstance == "" {
-		return fmt.Errorf("import key: agent instance is required")
+	if (record.AgentInstance == "") == (record.HomelabUserID == "") ||
+		(record.HomelabUserID != "" && (record.Namespace != "" || !validOpaqueID(record.HomelabUserID, 4096))) {
+		return fmt.Errorf("import key: exactly one valid agent or canonical human identity is required")
 	}
 	if !record.Tier.Valid() {
 		return fmt.Errorf("import key: invalid tier %q", record.Tier)
@@ -142,10 +144,32 @@ func (s *Store) checkRecords(records map[[sha256.Size]byte]Record) error {
 
 func (s *Store) checkRecordsLocked(records map[[sha256.Size]byte]Record) error {
 	for digest, record := range records {
-		if existing, ok := s.records[digest]; ok &&
-			(existing.Namespace != record.Namespace || existing.AgentInstance != record.AgentInstance || existing.Tier != record.Tier) {
-			return fmt.Errorf("restore agent keys: key conflicts with an existing identity or tier")
+		if existing, ok := s.records[digest]; ok && !sameOwner(existing, record) {
+			return fmt.Errorf("restore keys: key conflicts with an existing identity or tier")
 		}
+	}
+	return nil
+}
+
+func sameOwner(a, b Record) bool {
+	return a.Namespace == b.Namespace && a.AgentInstance == b.AgentInstance &&
+		a.HomelabUserID == b.HomelabUserID && a.Tier == b.Tier
+}
+
+// replaceHumans reconciles only canonical-human verification records.
+func (s *Store) replaceHumans(records map[[sha256.Size]byte]Record) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.checkRecordsLocked(records); err != nil {
+		return err
+	}
+	for digest, record := range s.records {
+		if record.HomelabUserID != "" {
+			delete(s.records, digest)
+		}
+	}
+	for digest, record := range records {
+		s.records[digest] = record
 	}
 	return nil
 }
